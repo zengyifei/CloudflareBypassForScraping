@@ -1,7 +1,6 @@
 import json
 import re
 import os
-import asyncio
 from urllib.parse import urlparse
 
 from CloudflareBypasser import CloudflareBypasser
@@ -14,6 +13,8 @@ import argparse
 from pyvirtualdisplay import Display
 import uvicorn
 import atexit
+import asyncio
+import websockets
 
 # Check if running in Docker mode
 DOCKER_MODE = os.getenv("DOCKERMODE", "false").lower() == "true"
@@ -202,8 +203,10 @@ def get_or_create_browser(browser_id: str, proxy: str = None) -> ChromiumPage:
         return browser_cache[browser_id]
 
     options = ChromiumOptions().auto_port()
+    options.set_argument("--auto-open-devtools-for-tabs", "true")
+    options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
-        options.set_argument("--auto-open-devtools-for-tabs", "true")
+        # options.set_argument("--auto-open-devtools-for-tabs", "true")
         options.set_argument("--remote-debugging-port=9222")
         options.set_argument("--no-sandbox")  # Docker 中必需
         options.set_argument("--disable-gpu")  # 在某些情况下有帮助
@@ -230,48 +233,157 @@ async def solve_cloudflare(page: ChromiumPage, retries: int = 5, log: bool = Tru
         return False
 
 
+# 修改关闭页面和清理缓存的辅助函数
+def cleanup_page(page, page_key=None, browser_id=None):
+    """关闭标签页并清理相关缓存"""
+    # 从页面缓存中删除
+    if page_key and page_key in page_cache:
+        del page_cache[page_key]
+
+    # 关闭标签页
+    if page:
+        try:
+            # 尝试关闭标签页
+            try:
+                # 尝试使用 close 方法
+                page.close()
+            except:
+                try:
+                    # 尝试使用 tab_close 方法
+                    page.tab_close()
+                except:
+                    # 如果都失败，尝试使用 JavaScript 关闭
+                    page.run_js('window.close()')
+        except Exception as e:
+            print(f"关闭标签页时出错: {str(e)}")
+
+
+# 修改获取或创建页面的函数，处理浏览器连接断开的情况
+async def get_or_create_page(page_key: str = None, browser_id: str = "default", url: str = None, cookies: Dict[str, str] = None, cookie_domain: str = None, snapshot: bool = False):
+    """
+    获取或创建页面，处理页面连接断开等异常情况，自动解决 Cloudflare 挑战
+    """
+    page = None
+    is_new = False
+    success = True
+    error_msg = None
+    browser = None
+
+    # 尝试从缓存获取页面
+    if page_key and page_key in page_cache:
+        page = page_cache[page_key]
+
+        # 检查页面连接是否正常
+        try:
+            # 使用一个简单的操作来测试页面连接
+            page.run_js('1+1')
+        except Exception as e:
+            print(f"检测到页面连接已断开，重新创建页面: {str(e)}")
+            # 清理旧页面
+            cleanup_page(page, page_key, browser_id)
+            # 将页面设为 None，下面会重新创建
+            page = None
+            # 从缓存中移除
+            if page_key in page_cache:
+                del page_cache[page_key]
+
+    # 如果没有缓存的页面或页面连接已断开，创建新页面
+    if page is None and url:
+        is_new = True
+        try:
+            # 检查浏览器是否存在且连接正常
+            if browser_id in browser_cache:
+                browser = browser_cache[browser_id]
+                try:
+                    # 测试浏览器连接
+                    browser.run_js('1+1')
+                except Exception as e:
+                    print(f"检测到浏览器连接已断开，重新创建浏览器: {str(e)}")
+                    # 从缓存中移除
+                    if browser_id in browser_cache:
+                        try:
+                            browser_cache[browser_id].quit()
+                        except:
+                            pass
+                        del browser_cache[browser_id]
+                    browser = None
+
+            # 如果浏览器不存在或连接断开，创建新浏览器
+            if browser is None:
+                browser = get_or_create_browser(browser_id)
+
+            # 创建新标签页
+            page = browser.new_tab()
+            # 导航到 URL
+            page.get(url)
+
+            # 设置 cookies
+            if cookies:
+                for name, value in cookies.items():
+                    domain = cookie_domain or urlparse(url).netloc
+                    page.set_cookies({name: value}, domain=domain)
+
+            # 自动尝试解决 Cloudflare 挑战
+            solved = await solve_cloudflare(page)
+            if not solved:
+                success = False
+                error_msg = "绕过cloudflare失败"
+
+                # 如果需要截图
+                if snapshot:
+                    try:
+                        os.makedirs('screenshot', exist_ok=True)
+                        page.save_screenshot(f'screenshot/{urlparse(url).netloc}.png')
+                        with open(f'screenshot/{urlparse(url).netloc}.html', "w", encoding="utf-8") as f:
+                            f.write(page.html)
+                    except Exception as e:
+                        print(f"截图失败: {str(e)}")
+
+                # 清理资源
+                cleanup_page(page, page_key, browser_id)
+                page = None
+            else:
+                # 如果需要缓存页面
+                if page_key:
+                    page_cache[page_key] = page
+
+        except Exception as e:
+            success = False
+            error_msg = f"创建页面失败: {str(e)}"
+            if page:
+                cleanup_page(page, page_key, browser_id)
+                page = None
+
+    return page, is_new, success, error_msg
+
+
 # New POST request endpoint
 @app.post("/")
 async def chrome_request(req: ChromeRequest):
     if not is_safe_url(req.url):
         raise HTTPException(status_code=400, detail="Invalid URL")
 
-    # Check if there is a cached page
+    # 获取页面缓存键
     page_key = f"{req.browser_id}_{req.page_id}" if req.page_id else None
-    page = None
 
     try:
-        if page_key and page_key in page_cache:
-            page = page_cache[page_key]
-        else:
-            # Get or create browser instance
-            browser = get_or_create_browser(req.browser_id)
-            page = browser
+        # 获取或创建页面
+        page, is_new, success, error_msg = await get_or_create_page(
+            page_key=page_key,
+            browser_id=req.browser_id,
+            url=req.url,
+            cookies=req.cookies,
+            cookie_domain=req.cookie_domain,
+            snapshot=req.snapshot
+        )
 
-            # Navigate to URL
-            page.get(req.url)
+        if not success:
+            return {"ok": False, "msg": error_msg}
 
-            # Set cookies
-            if req.cookies:
-                for name, value in req.cookies.items():
-                    domain = req.cookie_domain or urlparse(req.url).netloc
-                    page.set_cookies({name: value}, domain=domain)
+        if not page:
+            return {"ok": False, "msg": "Failed to create page"}
 
-            # If need to cache the page
-            if page_key:
-                page_cache[page_key] = page
-
-        # Try to solve Cloudflare challenge
-        solved = await solve_cloudflare(page)
-        if not solved:
-            if req.snapshot:
-                os.makedirs('screenshot', exist_ok=True)
-                page.save_screenshot(f'screenshot/{urlparse(req.url).netloc}.png')
-                with open(f'screenshot/{urlparse(req.url).netloc}.html', "w", encoding="utf-8") as f:
-                    f.write(page.html)
-            return {"ok": False, "msg": "Failed to pass Cloudflare challenge"}
-
-        # Process request
+        # 处理请求
         if not req.api_url:
             resp_data = page.html
             resp_obj = resp_data
@@ -329,39 +441,365 @@ async def chrome_request(req: ChromeRequest):
                 try:
                     resp_obj = json.loads(resp_data)
                 except Exception as e:
-                    return {"ok": False, "msg": f"Non-JSON data: {resp_data}"}
+                    # 解析 JSON 失败，清理资源
+                    cleanup_page(page, page_key, req.browser_id)
 
-        # If don't need to cache the page, close
-        if not page_key and page:
-            if req.browser_id not in browser_cache:  # If not shared browser, close
-                page.quit()
+                    return {"ok": False, "msg": f"非 JSON 数据: {resp_data}"}
+
+        # 如果不需要缓存页面，则清理
+        if not page_key:
+            print('关闭页面', req.browser_id, req.browser_id not in browser_cache)
+            cleanup_page(page, page_key, req.browser_id)
 
         return resp_obj
 
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
+        print(f"Error in chrome_request: {error_trace}")
 
         # 如果需要截图
         if req.snapshot and page:
-            os.makedirs('screenshot', exist_ok=True)
-            page.save_screenshot(f'screenshot/error_{urlparse(req.url).netloc}.png')
-            with open(f'screenshot/error_{urlparse(req.url).netloc}.html', "w", encoding="utf-8") as f:
-                f.write(page.html)
+            try:
+                os.makedirs('screenshot', exist_ok=True)
+                page.save_screenshot(f'screenshot/error_{urlparse(req.url).netloc}.png')
+                with open(f'screenshot/error_{urlparse(req.url).netloc}.html', "w", encoding="utf-8") as f:
+                    f.write(page.html)
+            except Exception as screenshot_error:
+                print(f"Error taking screenshot: {str(screenshot_error)}")
 
-        # 如果页面被缓存，从缓存中清除
-        if page_key and page_key in page_cache:
-            del page_cache[page_key]
+        # 清理资源
+        cleanup_page(page, page_key, req.browser_id)
 
-        # 关闭页面
+        return {"ok": False, "msg": str(e), "trace": error_trace}
+
+
+import websocket
+import json
+import threading
+import time
+
+
+async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, column_number=0, target_func_name="targetFunction", export_func_name="exposedFunction"):
+    # page.run_cdp("Debugger.enable")
+    # 获取当前页面的targetId
+    target_info = page.run_cdp("Target.getTargetInfo")
+    target_id = target_info.get('targetInfo', {}).get('targetId')
+    if not target_id:
+        print("无法获取目标ID")
+        return False
+
+    # 构建WebSocket URL
+    ws_url = f"ws://{page.address}/devtools/page/{target_id}"
+    print(f"连接DevTools WebSocket: {ws_url}")
+    try:
+        async with websockets.connect(ws_url, timeout=15) as ws:
+            print("WebSocket连接已打开")
+            # 启用调试器
+            await ws.send(json.dumps({
+                "id": 1,
+                "method": "Debugger.enable"
+            }))
+            # 设置断点
+            await ws.send(json.dumps({
+                "id": 2,
+                "method": "Debugger.setBreakpointByUrl",
+                "params": {
+                    "url": chunk_url,
+                    "lineNumber": line_number,
+                    "columnNumber": column_number,
+                }
+            }))
+
+            # --- 第二阶段：监听消息直到满足条件 ---
+            trigger_received = False
+            while not trigger_received:
+                # 设置单次接收超时（例如 10 秒）
+                response = await asyncio.wait_for(ws.recv(), timeout=10)
+                # print(f"收到消息: {response}")
+                data = json.loads(response)
+                # 检查是否为断点暂停事件
+                if data.get('method') == 'Debugger.paused':
+                    params = data.get('params', {})
+                    hit_breakpoints = params.get('hitBreakpoints', [])
+                    call_frame_id = params.get('callFrames', [])[0].get('callFrameId')
+
+                    if hit_breakpoints:
+                        hit_id = hit_breakpoints[0]
+                        trigger_received = True
+
+                        # 注入辅助函数
+                        # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
+                        script = """
+                                console.log('目标函数', """ + target_func_name + """);
+                                window.""" + export_func_name + """ = """ + target_func_name + """; 
+                                """
+                        await ws.send(json.dumps({
+                            "id": 999,
+                            "method": "Debugger.evaluateOnCallFrame",
+                            "params": {
+                                "callFrameId": call_frame_id,
+                                "expression": script
+                            }
+                        }))
+
+                        # 移除断点
+                        await ws.send(json.dumps({
+                            "id": 1000,
+                            "method": "Debugger.removeBreakpoint",
+                            "params": {
+                                "breakpointId": hit_id
+                            }
+                        }))
+
+                        # 恢复执行
+                        await ws.send(json.dumps({
+                            "id": 1001,
+                            "method": "Debugger.resume",
+                            "params": {}
+                        }))
+
+    except asyncio.TimeoutError:
+        print("操作超时，强制关闭连接")
+    except websockets.exceptions.ConnectionClosed as e:
+        print(f"连接异常关闭: {e.code} {e.reason}")
+    except Exception as e:
+        print(f"未知错误: {str(e)}")
+    finally:
+        if ws and not ws.closed:
+            await ws.close()
+
+'''
+def setup_breakpoint_and_expose_function(page, chunk_url, line_number=1, target_func_name="targetFunction", export_func_name="exposedFunction"):
+    """
+    通过WebSocket监听断点事件，执行自定义操作，然后移除断点并继续执行
+    """
+    # page.run_cdp("Debugger.enable")
+
+    # 获取当前页面的targetId
+    target_info = page.run_cdp("Target.getTargetInfo")
+    target_id = target_info.get('targetInfo', {}).get('targetId')
+
+    if not target_id:
+        print("无法获取目标ID")
+        return False
+
+    # 构建WebSocket URL
+    ws_url = f"ws://{page.address}/devtools/page/{target_id}"
+    # with websocket.connect(ws_url) as ws:
+    print(f"连接DevTools WebSocket: {ws_url}")
+
+    # 保存断点处理状态
+    breakpoint_handled = False
+    event = threading.Event()
+
+    # 断点处理函数
+    def on_breakpoint_triggered(hit_breakpoint_id, call_frame_id):
+        nonlocal breakpoint_handled
+        if breakpoint_handled:
+            return
+
+        breakpoint_handled = True
+        print("\n====== 断点已触发! ======")
+        print(f"命中断点ID: {hit_breakpoint_id}")
+        print(f"call_frame_id: {call_frame_id}")
+        print("提示: 在控制台使用 window.captureFunction(yourFunc) 捕获函数")
+
+        # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
+        #
+        script = """
+                console.log('目标函数', """ + target_func_name + """);
+                window.""" + export_func_name + """ = """ + target_func_name + """; 
+                """
+
+        # 注入辅助函数
+        ws.send(json.dumps({
+            "id": 999,
+            "method": "Debugger.evaluateOnCallFrame",
+            "params": {
+                "callFrameId": call_frame_id,
+                "expression": script
+            }
+        }))
+        print('script', script)
+        # 移除断点
+        ws.send(json.dumps({
+            "id": 1000,
+            "method": "Debugger.removeBreakpoint",
+            "params": {
+                "breakpointId": hit_breakpoint_id
+            }
+        }))
+
+        # 恢复执行
+        ws.send(json.dumps({
+            "id": 1001,
+            "method": "Debugger.resume",
+            "params": {}
+        }))
+        # page.run_cdp("Debugger.disable")
+        # 通知主线程可以关闭连接
+        event.set()
+
+    # WebSocket消息处理
+    def on_message(ws, message):
+        try:
+            data = json.loads(message)
+            # print('收到消息', data)
+
+            # 检查是否为断点暂停事件
+            if data.get('method') == 'Debugger.paused':
+                params = data.get('params', {})
+                hit_breakpoints = params.get('hitBreakpoints', [])
+                call_frame_id = params.get('callFrames', [])[0].get('callFrameId')
+
+                if hit_breakpoints:
+                    hit_id = hit_breakpoints[0]
+                    on_breakpoint_triggered(hit_id, call_frame_id)
+                    # 启动新线程处理断点，避免阻塞WebSocket接收线程
+                    # threading.Thread(target=, args=(hit_id, call_frame_id), daemon=True).start()
+        except Exception as e:
+            print(f"处理消息出错: {e}")
+
+    def on_error(ws, error):
+        print(f"WebSocket错误: {error}")
+
+    def on_close(ws, close_status_code, close_msg):
+        print(f"WebSocket连接已关闭: {close_status_code} {close_msg}")
+
+    def on_open(ws):
+        print("WebSocket连接已打开")
+
+        # 启用调试器
+        ws.send(json.dumps({
+            "id": 1,
+            "method": "Debugger.enable"
+        }))
+        ws.send(json.dumps({
+            "id": 2,
+            "method": "Debugger.setBreakpointByUrl",
+            "params": {
+                "url": chunk_url,
+                "lineNumber": 1,
+                "columnNumber": 45819,
+            }
+        }))
+    # 创建WebSocket连接
+    ws = websocket.WebSocketApp(
+        ws_url,
+        on_message=on_message,
+        on_error=on_error,
+        on_open=on_open,
+        on_close=on_close
+    )
+
+    print(f"启动线程: {ws_url}")
+    # 启动WebSocket线程
+    ws_thread = threading.Thread(target=ws.run_forever, daemon=True)
+    ws_thread.start()
+
+    print(f"等待断点")
+    # 等待断点处理完成或超时
+    wait_time = 300  # 最多等待5分钟
+    if not event.wait(wait_time):
+        print("超时：断点未在预期时间内触发")
+
+    # 关闭WebSocket连接
+    ws.close()
+    print("断点处理完成，WebSocket连接已关闭")
+
+    return True
+'''
+
+# 修改 Debank API 请求模型
+
+
+class DebankRequest(BaseModel):
+    method: str = Field(...)  # HTTP 方法，如 GET、POST 等
+    route: str = Field(...)   # API 路由，如 "/v1/user/profile"
+    data: Optional[Dict[str, Any]] = Field(None)  # 请求数据对象
+
+# 修改 Debank API 端点
+
+
+@app.post("/debank_sign")
+async def debank_sign(req: DebankRequest):
+    # 设置页面缓存键
+    page_key = f"debank_daemon"
+    browser_id = "default"
+    page = None  # 初始化 page 变量为 None
+
+    try:
+        # 获取或创建页面
+        page, is_new, success, error_msg = await get_or_create_page(
+            page_key=page_key,
+            browser_id=browser_id,
+            url="https://debank.com/profile/0x3fe861679bd8ec58dd45460ffd38ee39107aaff8/history" if not page_key in page_cache else None
+        )
+
+        if not success:
+            return {"ok": False, "msg": error_msg}
+
+        if not page:
+            return {"ok": False, "msg": "Failed to create page"}
+
+        target_func_name = "x"
+        export_func_name = "debank_sign"
+        # 检查 window.debank_sign 函数是否存在
+        check_script = """typeof window.""" + export_func_name + """ === 'function'"""
+        has_debank_sign = page.run_js(check_script, as_expr=True)
+        if not has_debank_sign:
+            await setup_breakpoint_and_expose_function(page, "https://assets.debank.com/static/js/6129.fbaacfcf.chunk.js", line_number=1, column_number=45819, target_func_name=target_func_name, export_func_name=export_func_name)
+            has_debank_sign = page.run_js(check_script, as_expr=True)
+            print(has_debank_sign, 'script', check_script)
+        if not has_debank_sign:
+            raise Exception("window.debank_sign 函数不存在，暂不支持此操作")
+
+        sign_script = """
+                try {
+                    // 确保参数格式正确
+                    const data = %s;
+                    const method = "%s";
+                    const route = "%s";
+                    const options = {"version": "v2"};
+                    // 调用函数
+                    const result = window.debank_sign(data, method, route, options);
+                    return result;
+                    // return {...result, "user_agent": navigator.userAgent};
+                } catch (e) {
+                    console.error("调用 debank_sign 出错:", e);
+                    return {"error": e.toString()};
+                }
+        """ % (json.dumps(req.data) if req.data else "{}", req.method, req.route)
+        # print('sign_script', sign_script)
+
+        sign_result = page.run_js(sign_script)
+        # print('sign_result', sign_result)
+
+        # 检查结果是否包含错误
+        if isinstance(sign_result, dict) and 'error' in sign_result:
+            # 清理资源
+            if not page_key:
+                cleanup_page(page, page_key, browser_id)
+            return {"ok": False, "msg": f"调用 window.debank_sign 失败: {sign_result['error']}"}
+
+        # 返回 API 调用结果和签名信息
+        return {
+            # "user_agent": sign_result.get('user_agent', ''),
+            "nonce": sign_result.get('nonce', ''),
+            "ts": sign_result.get('ts', 0),
+            "signature": sign_result.get('signature', ''),
+            "version": sign_result.get('version', '')
+        }
+
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Debank API 错误: {error_trace}")
+
+        # 清理资源（只有当 page 不为 None 时才清理）
         if page:
-            # 如果不是共享浏览器，则关闭
-            if req.browser_id not in browser_cache:
-                page.quit()
-            # 如果是共享浏览器但出错了，也应该关闭并从缓存中移除
-            elif req.browser_id in browser_cache:
-                page.quit()
-                del browser_cache[req.browser_id]
+            cleanup_page(page, page_key, browser_id)
 
         return {"ok": False, "msg": str(e), "trace": error_trace}
 
