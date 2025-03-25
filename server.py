@@ -15,6 +15,7 @@ import uvicorn
 import atexit
 import asyncio
 import websockets
+import json
 
 # Check if running in Docker mode
 # 检测操作系统类型，如果是Linux则设置为true，否则为false
@@ -207,7 +208,7 @@ def get_or_create_browser(browser_id: str, proxy: str = None) -> ChromiumPage:
     options = ChromiumOptions().auto_port()
     # options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
-        options.set_argument("--auto-open-devtools-for-tabs", "true") # 打开控制台
+        options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
         options.set_argument("--remote-debugging-port=9222")
         options.set_argument("--no-sandbox")  # Docker 中必需
         options.set_argument("--disable-gpu")  # 在某些情况下有帮助
@@ -475,13 +476,10 @@ async def chrome_request(req: ChromeRequest):
         return {"ok": False, "msg": str(e), "trace": error_trace}
 
 
-import websocket
-import json
-import threading
-import time
-
-
 async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, column_number=0, target_func_name="targetFunction", export_func_name="exposedFunction"):
+    # 初始化 ws 变量为 None，确保在 finally 块中可以安全引用
+    ws = None
+
     # page.run_cdp("Debugger.enable")
     # 获取当前页面的targetId
     target_info = page.run_cdp("Target.getTargetInfo")
@@ -494,160 +492,32 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
     ws_url = f"ws://{page.address}/devtools/page/{target_id}"
     print(f"连接DevTools WebSocket: {ws_url}")
     try:
-        async with websockets.connect(ws_url, timeout=15) as ws:
-            print("WebSocket连接已打开")
-            # 启用调试器
-            await ws.send(json.dumps({
-                "id": 1,
-                "method": "Debugger.enable"
-            }))
-            # 设置断点
-            await ws.send(json.dumps({
-                "id": 2,
-                "method": "Debugger.setBreakpointByUrl",
-                "params": {
-                    "url": chunk_url,
-                    "lineNumber": line_number,
-                    "columnNumber": column_number,
-                }
-            }))
-
-            # --- 第二阶段：监听消息直到满足条件 ---
-            trigger_received = False
-            while not trigger_received:
-                # 设置单次接收超时（例如 10 秒）
-                response = await asyncio.wait_for(ws.recv(), timeout=10)
-                # print(f"收到消息: {response}")
-                data = json.loads(response)
-                # 检查是否为断点暂停事件
-                if data.get('method') == 'Debugger.paused':
-                    params = data.get('params', {})
-                    hit_breakpoints = params.get('hitBreakpoints', [])
-                    call_frame_id = params.get('callFrames', [])[0].get('callFrameId')
-
-                    if hit_breakpoints:
-                        hit_id = hit_breakpoints[0]
-                        trigger_received = True
-
-                        # 注入辅助函数
-                        # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
-                        script = """
-                                console.log('目标函数', """ + target_func_name + """);
-                                window.""" + export_func_name + """ = """ + target_func_name + """; 
-                                """
-                        await ws.send(json.dumps({
-                            "id": 999,
-                            "method": "Debugger.evaluateOnCallFrame",
-                            "params": {
-                                "callFrameId": call_frame_id,
-                                "expression": script
-                            }
-                        }))
-
-                        # 移除断点
-                        await ws.send(json.dumps({
-                            "id": 1000,
-                            "method": "Debugger.removeBreakpoint",
-                            "params": {
-                                "breakpointId": hit_id
-                            }
-                        }))
-
-                        # 恢复执行
-                        await ws.send(json.dumps({
-                            "id": 1001,
-                            "method": "Debugger.resume",
-                            "params": {}
-                        }))
-
-    except asyncio.TimeoutError:
-        print("操作超时，强制关闭连接")
-    except websockets.exceptions.ConnectionClosed as e:
-        print(f"连接异常关闭: {e.code} {e.reason}")
-    except Exception as e:
-        print(f"未知错误: {str(e)}")
-    finally:
-        if ws and not ws.closed:
-            await ws.close()
-
-'''
-def setup_breakpoint_and_expose_function(page, chunk_url, line_number=1, target_func_name="targetFunction", export_func_name="exposedFunction"):
-    """
-    通过WebSocket监听断点事件，执行自定义操作，然后移除断点并继续执行
-    """
-    # page.run_cdp("Debugger.enable")
-
-    # 获取当前页面的targetId
-    target_info = page.run_cdp("Target.getTargetInfo")
-    target_id = target_info.get('targetInfo', {}).get('targetId')
-
-    if not target_id:
-        print("无法获取目标ID")
-        return False
-
-    # 构建WebSocket URL
-    ws_url = f"ws://{page.address}/devtools/page/{target_id}"
-    # with websocket.connect(ws_url) as ws:
-    print(f"连接DevTools WebSocket: {ws_url}")
-
-    # 保存断点处理状态
-    breakpoint_handled = False
-    event = threading.Event()
-
-    # 断点处理函数
-    def on_breakpoint_triggered(hit_breakpoint_id, call_frame_id):
-        nonlocal breakpoint_handled
-        if breakpoint_handled:
-            return
-
-        breakpoint_handled = True
-        print("\n====== 断点已触发! ======")
-        print(f"命中断点ID: {hit_breakpoint_id}")
-        print(f"call_frame_id: {call_frame_id}")
-        print("提示: 在控制台使用 window.captureFunction(yourFunc) 捕获函数")
-
-        # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
-        #
-        script = """
-                console.log('目标函数', """ + target_func_name + """);
-                window.""" + export_func_name + """ = """ + target_func_name + """; 
-                """
-
-        # 注入辅助函数
-        ws.send(json.dumps({
-            "id": 999,
-            "method": "Debugger.evaluateOnCallFrame",
-            "params": {
-                "callFrameId": call_frame_id,
-                "expression": script
-            }
+        # 移除 timeout 参数，使其兼容 Python 3.10
+        ws = await websockets.connect(ws_url)
+        print("WebSocket连接已打开")
+        # 启用调试器
+        await ws.send(json.dumps({
+            "id": 1,
+            "method": "Debugger.enable"
         }))
-        print('script', script)
-        # 移除断点
-        ws.send(json.dumps({
-            "id": 1000,
-            "method": "Debugger.removeBreakpoint",
+        # 设置断点
+        await ws.send(json.dumps({
+            "id": 2,
+            "method": "Debugger.setBreakpointByUrl",
             "params": {
-                "breakpointId": hit_breakpoint_id
+                "url": chunk_url,
+                "lineNumber": line_number,
+                "columnNumber": column_number,
             }
         }))
 
-        # 恢复执行
-        ws.send(json.dumps({
-            "id": 1001,
-            "method": "Debugger.resume",
-            "params": {}
-        }))
-        # page.run_cdp("Debugger.disable")
-        # 通知主线程可以关闭连接
-        event.set()
-
-    # WebSocket消息处理
-    def on_message(ws, message):
-        try:
-            data = json.loads(message)
-            # print('收到消息', data)
-
+        # --- 第二阶段：监听消息直到满足条件 ---
+        trigger_received = False
+        while not trigger_received:
+            # 使用 asyncio.wait_for 设置超时，而不是在 connect 中设置
+            response = await asyncio.wait_for(ws.recv(), timeout=10)
+            # print(f"收到消息: {response}")
+            data = json.loads(response)
             # 检查是否为断点暂停事件
             if data.get('method') == 'Debugger.paused':
                 params = data.get('params', {})
@@ -656,61 +526,55 @@ def setup_breakpoint_and_expose_function(page, chunk_url, line_number=1, target_
 
                 if hit_breakpoints:
                     hit_id = hit_breakpoints[0]
-                    on_breakpoint_triggered(hit_id, call_frame_id)
-                    # 启动新线程处理断点，避免阻塞WebSocket接收线程
-                    # threading.Thread(target=, args=(hit_id, call_frame_id), daemon=True).start()
-        except Exception as e:
-            print(f"处理消息出错: {e}")
+                    trigger_received = True
 
-    def on_error(ws, error):
-        print(f"WebSocket错误: {error}")
+                    # 注入辅助函数
+                    # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
+                    script = """
+                            console.log('目标函数', """ + target_func_name + """);
+                            window.""" + export_func_name + """ = """ + target_func_name + """; 
+                            """
+                    await ws.send(json.dumps({
+                        "id": 999,
+                        "method": "Debugger.evaluateOnCallFrame",
+                        "params": {
+                            "callFrameId": call_frame_id,
+                            "expression": script
+                        }
+                    }))
 
-    def on_close(ws, close_status_code, close_msg):
-        print(f"WebSocket连接已关闭: {close_status_code} {close_msg}")
+                    # 移除断点
+                    await ws.send(json.dumps({
+                        "id": 1000,
+                        "method": "Debugger.removeBreakpoint",
+                        "params": {
+                            "breakpointId": hit_id
+                        }
+                    }))
 
-    def on_open(ws):
-        print("WebSocket连接已打开")
+                    # 恢复执行
+                    await ws.send(json.dumps({
+                        "id": 1001,
+                        "method": "Debugger.resume",
+                        "params": {}
+                    }))
 
-        # 启用调试器
-        ws.send(json.dumps({
-            "id": 1,
-            "method": "Debugger.enable"
-        }))
-        ws.send(json.dumps({
-            "id": 2,
-            "method": "Debugger.setBreakpointByUrl",
-            "params": {
-                "url": chunk_url,
-                "lineNumber": 1,
-                "columnNumber": 45819,
-            }
-        }))
-    # 创建WebSocket连接
-    ws = websocket.WebSocketApp(
-        ws_url,
-        on_message=on_message,
-        on_error=on_error,
-        on_open=on_open,
-        on_close=on_close
-    )
-
-    print(f"启动线程: {ws_url}")
-    # 启动WebSocket线程
-    ws_thread = threading.Thread(target=ws.run_forever, daemon=True)
-    ws_thread.start()
-
-    print(f"等待断点")
-    # 等待断点处理完成或超时
-    wait_time = 300  # 最多等待5分钟
-    if not event.wait(wait_time):
-        print("超时：断点未在预期时间内触发")
-
-    # 关闭WebSocket连接
-    ws.close()
-    print("断点处理完成，WebSocket连接已关闭")
+    except asyncio.TimeoutError:
+        print("操作超时，强制关闭连接")
+    except websockets.exceptions.ConnectionClosed as e:
+        print(f"连接异常关闭: {e.code} {e.reason}")
+    except Exception as e:
+        print(f"未知错误: {str(e)}")
+    finally:
+        # 安全地关闭 WebSocket 连接
+        if ws is not None:
+            try:
+                await ws.close()
+            except Exception as e:
+                print(f"关闭 WebSocket 连接时出错: {str(e)}")
 
     return True
-'''
+
 
 # 修改 Debank API 请求模型
 
