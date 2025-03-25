@@ -17,7 +17,9 @@ import asyncio
 import websockets
 
 # Check if running in Docker mode
-DOCKER_MODE = os.getenv("DOCKERMODE", "false").lower() == "true"
+# 检测操作系统类型，如果是Linux则设置为true，否则为false
+import platform
+DOCKER_MODE = os.getenv("DOCKERMODE", "true" if platform.system() == "Linux" else "false").lower() == "true"
 
 SERVER_PORT = int(os.getenv("SERVER_PORT", 8889))
 
@@ -203,10 +205,9 @@ def get_or_create_browser(browser_id: str, proxy: str = None) -> ChromiumPage:
         return browser_cache[browser_id]
 
     options = ChromiumOptions().auto_port()
-    options.set_argument("--auto-open-devtools-for-tabs", "true")
-    options.set_argument("--remote-allow-origins=*")
+    # options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
-        # options.set_argument("--auto-open-devtools-for-tabs", "true")
+        options.set_argument("--auto-open-devtools-for-tabs", "true") # 打开控制台
         options.set_argument("--remote-debugging-port=9222")
         options.set_argument("--no-sandbox")  # Docker 中必需
         options.set_argument("--disable-gpu")  # 在某些情况下有帮助
