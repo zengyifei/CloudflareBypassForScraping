@@ -511,12 +511,13 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
             }
         }))
 
+        print("监听消息")
         # --- 第二阶段：监听消息直到满足条件 ---
         trigger_received = False
         while not trigger_received:
             # 使用 asyncio.wait_for 设置超时，而不是在 connect 中设置
             response = await asyncio.wait_for(ws.recv(), timeout=10)
-            # print(f"收到消息: {response}")
+            print(f"收到消息: {response}")
             data = json.loads(response)
             # 检查是否为断点暂停事件
             if data.get('method') == 'Debugger.paused':
@@ -527,6 +528,7 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                 if hit_breakpoints:
                     hit_id = hit_breakpoints[0]
                     trigger_received = True
+                    print(f"断点触发")
 
                     # 注入辅助函数
                     # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
