@@ -209,7 +209,7 @@ def get_or_create_browser(browser_id: str, proxy: str = None) -> ChromiumPage:
     # options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
         options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
-        options.set_argument("--remote-debugging-port=9222")
+        # options.set_argument("--remote-debugging-port=9222")
         options.set_argument("--no-sandbox")  # Docker 中必需
         options.set_argument("--disable-gpu")  # 在某些情况下有帮助
         options.set_paths(browser_path=browser_path).headless(False)
