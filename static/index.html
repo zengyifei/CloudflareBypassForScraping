@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>逆向JS配置管理</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.7.2/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #4f46e5;
+            --secondary-color: #6366f1;
+            --success-color: #22c55e;
+            --danger-color: #ef4444;
+            --background-color: #f9fafb;
+            --card-background: #ffffff;
+            --text-primary: #111827;
+            --text-secondary: #4b5563;
+        }
+
+        body {
+            background-color: var(--background-color);
+            color: var(--text-primary);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        .navbar {
+            background-color: var(--card-background);
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            padding: 1rem;
+        }
+
+        .navbar-brand {
+            color: var(--primary-color) !important;
+            font-weight: 600;
+            font-size: 1.5rem;
+        }
+
+        .main-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 2rem 1rem;
+        }
+
+        .card {
+            background-color: var(--card-background);
+            border: none;
+            border-radius: 0.5rem;
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+            margin-bottom: 1rem;
+        }
+
+        .card-header {
+            background-color: transparent;
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 1rem;
+        }
+
+        .table {
+            margin-bottom: 0;
+        }
+
+        .table th {
+            border-top: none;
+            color: var(--text-secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+
+        .table td {
+            vertical-align: middle;
+            color: var(--text-primary);
+            font-size: 0.875rem;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        .btn-primary:hover {
+            background-color: var(--secondary-color);
+            border-color: var(--secondary-color);
+        }
+
+        .btn-danger {
+            background-color: var(--danger-color);
+            border-color: var(--danger-color);
+        }
+
+        .modal-content {
+            border-radius: 0.5rem;
+            border: none;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        .modal-header {
+            border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+            background-color: var(--background-color);
+            border-radius: 0.5rem 0.5rem 0 0;
+        }
+
+        .modal-footer {
+            border-top: 1px solid rgba(0, 0, 0, 0.1);
+            background-color: var(--background-color);
+            border-radius: 0 0 0.5rem 0.5rem;
+        }
+
+        .form-label {
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-bottom: 0.5rem;
+        }
+
+        .form-control {
+            border-radius: 0.375rem;
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            padding: 0.5rem 0.75rem;
+        }
+
+        .form-control:focus {
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+        }
+
+        .table-responsive {
+            border-radius: 0.5rem;
+            background-color: var(--card-background);
+            box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 768px) {
+            .table-responsive {
+                margin: 0 -1rem;
+                width: calc(100% + 2rem);
+            }
+
+            .main-container {
+                padding: 1rem;
+            }
+
+            .card-header {
+                padding: 0.75rem;
+            }
+
+            .table th, .table td {
+                white-space: nowrap;
+            }
+
+            .btn-sm {
+                padding: 0.25rem 0.5rem;
+            }
+        }
+
+        /* 自定义滚动条 */
+        .table-responsive::-webkit-scrollbar {
+            height: 6px;
+        }
+
+        .table-responsive::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        .table-responsive::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 3px;
+        }
+
+        .table-responsive::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+
+        /* 表格内容溢出处理 */
+        .table td {
+            max-width: 200px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* 操作按钮样式 */
+        .btn-action {
+            padding: 0.25rem 0.5rem;
+            margin: 0 0.25rem;
+        }
+
+        .btn-action i {
+            font-size: 0.875rem;
+        }
+
+        /* 加载动画 */
+        .loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar navbar-expand-lg navbar-light">
+        <div class="container-fluid">
+            <span class="navbar-brand">逆向JS配置管理</span>
+        </div>
+    </nav>
+
+    <!-- 主容器 -->
+    <div class="main-container">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0">配置列表</h5>
+                <button class="btn btn-primary" onclick="showAddModal()">
+                    <i class="bi bi-plus"></i> 添加配置
+                </button>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>API名称</th>
+                            <th>用户名</th>
+                            <th>源网站</th>
+                            <th>JS URL</th>
+                            <th>断点行号</th>
+                            <th>断点列号</th>
+                            <th>目标函数</th>
+                            <th>参数长度</th>
+                            <th>过期时间</th>
+                            <th>最大调用次数</th>
+                            <th>状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="configTable">
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 添加/编辑模态框 -->
+    <div class="modal fade" id="configModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="modalTitle">添加配置</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="configForm" class="row g-3">
+                        <input type="hidden" id="configId">
+                        <div class="col-md-6" id="apiNameRow" style="display: none;">
+                            <label class="form-label">API名称</label>
+                            <input type="text" class="form-control" id="apiName" readonly>
+                            <small class="text-muted">API名称由系统自动生成且不可修改</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">用户名 *</label>
+                            <input type="text" class="form-control" id="userName" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">源网站 *</label>
+                            <input type="text" class="form-control" id="sourceWebsite" required>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">JS URL *</label>
+                            <input type="text" class="form-control" id="hijackJsUrl" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">断点行号 *</label>
+                            <input type="number" class="form-control" id="breakpointLineNum" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">断点列号 *</label>
+                            <input type="number" class="form-control" id="breakpointColNum" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">目标函数 *</label>
+                            <input type="text" class="form-control" id="targetFunc" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">参数长度</label>
+                            <input type="number" class="form-control" id="paramsLen">
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">参数示例</label>
+                            <textarea class="form-control" id="paramsExample" rows="3" placeholder='[1, "example", {"key": "value"}]'></textarea>
+                            <small class="text-muted">请输入JSON格式的参数示例数组</small>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">过期时间</label>
+                            <input type="datetime-local" class="form-control" id="expireTime">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">最大调用次数</label>
+                            <input type="number" class="form-control" id="maxCalls" min="1">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">是否激活</label>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="isActive" checked>
+                                <label class="form-check-label" for="isActive">
+                                    激活状态（勾选后配置会加载到内存中）
+                                </label>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">描述</label>
+                            <textarea class="form-control" id="description" rows="3"></textarea>
+                        </div>
+                        <div class="col-12">
+                            <small class="text-muted">* 表示必填字段</small>
+                        </div>
+                    </form>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                    <button type="button" class="btn btn-primary" onclick="saveConfig()">保存</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 测试模态框 -->
+    <div class="modal fade" id="testModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">API测试</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">API名称</label>
+                        <input type="text" class="form-control" id="testApiName" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">参数 (JSON格式数组)</label>
+                        <textarea class="form-control" id="testParams" rows="5" placeholder='["参数1", "参数2", ...]'></textarea>
+                        <small class="text-muted">请输入JSON格式的数组，作为调用API的参数</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">响应结果</label>
+                        <pre id="testResult" class="form-control" style="min-height: 200px; white-space: pre-wrap;"></pre>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-primary" onclick="runApiTest()">发送请求</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载动画 -->
+    <div class="loading" style="display: none;">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        let configModal;
+        let currentMode = 'add';
+        let testModal;
+        let currentTestApiName;
+        const loading = document.querySelector('.loading');
+
+        document.addEventListener('DOMContentLoaded', function() {
+            configModal = new bootstrap.Modal(document.getElementById('configModal'));
+            testModal = new bootstrap.Modal(document.getElementById('testModal'));
+            loadConfigs();
+        });
+
+        function showLoading() {
+            loading.style.display = 'flex';
+        }
+
+        function hideLoading() {
+            loading.style.display = 'none';
+        }
+
+        function showAddModal() {
+            // 重置表单
+            document.getElementById('configForm').reset();
+            
+            // 设置标题
+            document.getElementById('modalTitle').textContent = '添加配置';
+            
+            // 隐藏API名称行
+            document.getElementById('apiNameRow').style.display = 'none';
+            
+            // 设置当前模式
+            currentMode = 'add';
+            
+            configModal.show();
+        }
+
+        function formatDateTimeLocal(date) {
+            return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+                .toISOString()
+                .slice(0, 16);
+        }
+
+        function formatDateTime(dateStr) {
+            const date = new Date(dateStr);
+            return date.toISOString()
+                .replace('T', ' ')
+                .slice(0, 19);
+        }
+
+        function showEditModal(config) {
+            currentMode = 'edit';
+            document.getElementById('modalTitle').textContent = '编辑配置';
+            document.getElementById('configId').value = config.id;
+            
+            // 显示API名称（只读）
+            document.getElementById('apiNameRow').style.display = 'block';
+            document.getElementById('apiName').value = config.api_name;
+            
+            document.getElementById('userName').value = config.user_name;
+            document.getElementById('sourceWebsite').value = config.source_website;
+            document.getElementById('hijackJsUrl').value = config.hijack_js_url;
+            document.getElementById('breakpointLineNum').value = config.breakpoint_line_num;
+            document.getElementById('breakpointColNum').value = config.breakpoint_col_num;
+            document.getElementById('targetFunc').value = config.target_func;
+            document.getElementById('paramsLen').value = config.params_len || '';
+            document.getElementById('description').value = config.description || '';
+            
+            // 处理参数示例，格式化显示
+            if (config.params_example) {
+                try {
+                    const exampleObj = JSON.parse(config.params_example);
+                    document.getElementById('paramsExample').value = JSON.stringify(exampleObj, null, 2);
+                } catch (e) {
+                    document.getElementById('paramsExample').value = config.params_example;
+                }
+            } else {
+                document.getElementById('paramsExample').value = '';
+            }
+            
+            // 处理过期时间，可能为null
+            if (config.expire_time) {
+                const expireDate = new Date(config.expire_time.replace(' ', 'T'));
+                document.getElementById('expireTime').value = formatDateTimeLocal(expireDate);
+            } else {
+                document.getElementById('expireTime').value = '';
+            }
+            
+            document.getElementById('maxCalls').value = config.max_calls || '';
+            document.getElementById('isActive').checked = config.is_active !== false;
+            configModal.show();
+        }
+
+        function showTestModal(config) {
+            document.getElementById('testApiName').value = config.api_name;
+            document.getElementById('testResult').textContent = '';
+            currentTestApiName = config.api_name;
+            
+            // 根据参数长度生成示例参数
+            let sampleParams = [];
+            if (config.params_len) {
+                for (let i = 0; i < config.params_len; i++) {
+                    sampleParams.push(`参数${i+1}`);
+                }
+            } else {
+                sampleParams = ["示例参数1", "示例参数2"];
+            }
+            // 处理参数示例，格式化显示
+            if (config.params_example) {
+                try {
+                    sampleParams = JSON.parse(config.params_example);
+                } catch (e) {}
+            }
+            document.getElementById('testParams').value = JSON.stringify(sampleParams, null, 2);
+            testModal.show();
+        }
+
+        async function runApiTest() {
+            try {
+                const paramsField = document.getElementById('testParams');
+                const resultField = document.getElementById('testResult');
+                
+                // 解析参数
+                let params;
+                try {
+                    params = JSON.parse(paramsField.value);
+                    if (!Array.isArray(params)) {
+                        throw new Error('参数必须是数组格式');
+                    }
+                } catch (e) {
+                    resultField.textContent = `参数解析错误: ${e.message}`;
+                    resultField.className = 'form-control text-danger';
+                    return;
+                }
+                
+                showLoading();
+                resultField.textContent = '请求中...';
+                
+                const response = await fetch(`/api/antijs/${currentTestApiName}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ data: params })
+                });
+                
+                const result = await response.json();
+                resultField.textContent = JSON.stringify(result, null, 2);
+                
+                if (response.ok) {
+                    resultField.className = 'form-control text-success';
+                } else {
+                    resultField.className = 'form-control text-danger';
+                }
+            } catch (error) {
+                console.error('API测试失败:', error);
+                document.getElementById('testResult').textContent = `请求失败: ${error.message}`;
+                document.getElementById('testResult').className = 'form-control text-danger';
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function loadConfigs() {
+            try {
+                showLoading();
+                const response = await fetch('/internal/api/configs', {
+                    credentials: 'include'
+                });
+                
+                if (response.status === 401) {
+                    window.location.href = '/admin';
+                    return;
+                }
+
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.detail || '加载失败');
+                }
+
+                const configs = result;
+                const tbody = document.getElementById('configTable');
+                tbody.innerHTML = '';
+                
+                configs.forEach(config => {
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td>${config.id}</td>
+                        <td>${config.api_name}</td>
+                        <td>${config.user_name}</td>
+                        <td title="${config.source_website}">${config.source_website}</td>
+                        <td title="${config.hijack_js_url}">${config.hijack_js_url}</td>
+                        <td>${config.breakpoint_line_num}</td>
+                        <td>${config.breakpoint_col_num}</td>
+                        <td>${config.target_func}</td>
+                        <td>${config.params_len || '-'}</td>
+                        <td>${config.expire_time || '-'}</td>
+                        <td>${config.max_calls || '-'}</td>
+                        <td>${config.is_active ? '<span class="badge bg-success">激活</span>' : '<span class="badge bg-secondary">禁用</span>'}</td>
+                        <td>
+                            <button class="btn btn-primary btn-action" onclick='showEditModal(${JSON.stringify(config)})' title="编辑">
+                                <i class="bi bi-pencil"></i>
+                            </button>
+                            <button class="btn btn-danger btn-action" onclick="deleteConfig(${config.id})" title="删除">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                            <button class="btn btn-success btn-action" onclick='showTestModal(${JSON.stringify(config)})' title="测试">
+                                <i class="bi bi-play"></i>
+                            </button>
+                        </td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (error) {
+                console.error('加载配置失败:', error);
+                alert('加载失败: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function saveConfig() {
+            try {
+                showLoading();
+                
+                // 处理参数示例，移除多余空格
+                let paramsExample = document.getElementById('paramsExample').value.trim();
+                if (paramsExample) {
+                    try {
+                        // 解析并重新序列化以移除多余空格
+                        paramsExample = JSON.stringify(JSON.parse(paramsExample));
+                    } catch (e) {
+                        showError('参数示例格式错误，请输入有效的JSON');
+                        return;
+                    }
+                }
+                
+                const formData = {
+                    user_name: document.getElementById('userName').value,
+                    source_website: document.getElementById('sourceWebsite').value,
+                    hijack_js_url: document.getElementById('hijackJsUrl').value,
+                    breakpoint_line_num: parseInt(document.getElementById('breakpointLineNum').value),
+                    breakpoint_col_num: parseInt(document.getElementById('breakpointColNum').value),
+                    target_func: document.getElementById('targetFunc').value,
+                    params_len: document.getElementById('paramsLen').value ? parseInt(document.getElementById('paramsLen').value) : null,
+                    params_example: paramsExample || null,
+                    expire_time: document.getElementById('expireTime').value ? formatDateTime(document.getElementById('expireTime').value) : null,
+                    max_calls: document.getElementById('maxCalls').value ? parseInt(document.getElementById('maxCalls').value) : null,
+                    is_active: document.getElementById('isActive').checked,
+                    description: document.getElementById('description').value || null
+                };
+
+                // 根据当前模式决定URL和请求方法
+                let url = '/internal/api/configs';
+                let method = 'POST';
+                
+                if (currentMode === 'edit') {
+                    const configId = document.getElementById('configId').value;
+                    url = `/internal/api/configs/${configId}`;
+                    method = 'PUT';
+                }
+                
+                const response = await fetch(url, {
+                    method: method,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    credentials: 'include',
+                    body: JSON.stringify(formData)
+                });
+
+                if (response.status === 401) {
+                    window.location.href = '/admin';
+                    return;
+                }
+
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.detail || '保存失败');
+                }
+
+                configModal.hide();
+                loadConfigs();
+            } catch (error) {
+                console.error('保存配置失败:', error);
+                alert('保存失败: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        async function deleteConfig(id) {
+            if (!confirm('确定要删除这条配置吗？')) {
+                return;
+            }
+
+            try {
+                showLoading();
+                const response = await fetch(`/internal/api/configs/${id}`, {
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
+
+                if (response.status === 401) {
+                    window.location.href = '/admin';
+                    return;
+                }
+
+                const result = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(result.detail || '删除失败');
+                }
+
+                loadConfigs();
+            } catch (error) {
+                console.error('删除配置失败:', error);
+                alert('删除失败: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+    </script>
+</body>
+</html> 

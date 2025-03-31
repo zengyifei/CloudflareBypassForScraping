@@ -1,0 +1,9 @@
+mysql:
+    host: localhost
+    port: 3306
+    user: root
+    password: Cd32d5e86e
+    database: test
+
+server:
+    port: 8889
