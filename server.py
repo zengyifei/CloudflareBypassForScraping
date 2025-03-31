@@ -5,9 +5,12 @@ from urllib.parse import urlparse
 
 from CloudflareBypasser import CloudflareBypasser
 from DrissionPage import ChromiumPage, ChromiumOptions
-from fastapi import FastAPI, HTTPException, Response, Body
+from fastapi import FastAPI, HTTPException, Response, Body, Request, Depends, status
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List, Union
 import argparse
 
 from pyvirtualdisplay import Display
@@ -16,6 +19,12 @@ import atexit
 import asyncio
 import websockets
 import json
+from datetime import datetime
+
+from models import JsReverseConfig, website_configs, init_db
+from internal_api import router as internal_api_router, verify_credentials
+from db import load_config, init_database_and_cache, get_db_session
+import hashlib
 
 # Check if running in Docker mode
 # 检测操作系统类型，如果是Linux则设置为true，否则为false
@@ -79,6 +88,21 @@ if BROWSER_TYPE == "edge":
 
 app = FastAPI()
 
+# 添加CORS中间件
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 添加静态文件服务
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# 添加内部API路由
+app.include_router(internal_api_router)
+
 # Storage for page and browser instances
 page_cache = {}
 browser_cache = {}
@@ -109,7 +133,7 @@ class ChromeRequest(BaseModel):
     snapshot: bool = Field(False)     # Whether to take a screenshot on failure, for debugging, do not use in production
 
     class Config:
-        schema_extra = {
+        json_schema_extra = {
             "example-req": {
                 "url": "https://blur.io/",
                 "api_url": "https://core-api.prod.blur.io/v1/buy/0x05da517b1bf9999b7762eaefa8372341a1a47559",
@@ -671,12 +695,130 @@ async def debank_sign(req: DebankRequest):
         return {"ok": False, "msg": str(e), "trace": error_trace}
 
 
+# API路由
+@app.get("/admin")
+async def get_admin_page(username: str = Depends(verify_credentials)):
+    with open('static/index.html', 'r', encoding='utf-8') as f:
+        content = f.read()
+    return HTMLResponse(content=content)
+
+# 新增 antijs API 路由
+
+
+class AntiJsRequest(BaseModel):
+    data: List[Any]
+
+
+@app.post("/api/antijs/{api_name}")
+async def anti_js(api_name: str, request: AntiJsRequest):
+    """接收数据并根据API名称处理"""
+
+    page = None  # 初始化 page 变量为 None
+    try:
+        # 从内存中获取配置
+        config = website_configs.get_by_api_name(api_name)
+        if not config:
+            # 配置不存在，返回403
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无效的API名称")
+
+        # 检查参数长度限制（如果设置了）
+        if config.get('params_len') is not None and len(request.data) != config['params_len']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(request.data)}"
+            )
+        # 检查配置是否过期
+        if config.get('expire_time'):
+            expire_time = config['expire_time']
+            if isinstance(expire_time, str):
+                expire_time = datetime.strptime(expire_time, '%Y-%m-%d %H:%M:%S')
+            if datetime.now() > expire_time:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="API已过期"
+                )
+
+        # 检查最大调用次数限制
+        if config.get('max_calls') is not None:
+            # 这里需要实现调用次数的计数逻辑
+            # 可以使用数据库或缓存来跟踪调用次数
+            pass
+
+        # 对source_website做MD5处理
+        page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+        print(f"网站MD5: {page_key}")
+        browser_id = "default"
+        # 获取或创建页面
+        page, is_new, success, error_msg = await get_or_create_page(
+            page_key=page_key,
+            browser_id=browser_id,
+            url=config['source_website'] if not page_key in page_cache else None
+        )
+
+        if not success:
+            return {"ok": False, "msg": error_msg}
+
+        if not page:
+            return {"ok": False, "msg": "Failed to create page"}
+
+        inject_func_name = "___" + api_name
+        # 检查 window.debank_sign 函数是否存在
+        check_script = """typeof window.""" + inject_func_name + """ === 'function'"""
+        injected = page.run_js(check_script, as_expr=True)
+        if not injected:
+            await setup_breakpoint_and_expose_function(page, config['hijack_js_url'], line_number=config['breakpoint_line_num'], column_number=config['breakpoint_col_num'], target_func_name=config['target_func'], export_func_name=inject_func_name)
+            injected = page.run_js(check_script, as_expr=True)
+            print(injected, 'script', check_script)
+        if not injected:
+            raise Exception("注入失败")
+
+        sign_script = """
+                try {
+                    // 调用函数
+                    const result = window.""" + inject_func_name + """(...%s);
+                    return result;
+                } catch (e) {
+                    return {"__error__": e.toString()};
+                }
+        """ % (json.dumps(request.data))
+        print('sign_script', sign_script)
+
+        sign_result = page.run_js(sign_script)
+        print('sign_result', sign_result)
+
+        # 检查结果是否包含错误
+        if isinstance(sign_result, dict) and '__error__' in sign_result:
+            # 清理资源
+            if not page_key:
+                cleanup_page(page, page_key, browser_id)
+            return {"ok": False, "msg": f"调用失败: {sign_result['__error__']}"}
+
+        # 返回 API 调用结果和签名信息
+        return {"ok": True, "data": sign_result}
+        # # 打印接收到的数据（未来可以替换为实际处理逻辑）
+        # formatted_data = json.dumps(request.data, ensure_ascii=False, indent=2)
+        # print(f"接收到API请求 [{api_name}]: {formatted_data}")
+
+        # 返回成功响应
+        # return {"success": True, "api_name": api_name, "message": "数据接收成功"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        # 清理资源（只有当 page 不为 None 时才清理）
+        if page:
+            cleanup_page(page, page_key, browser_id)
+            # return {"ok": False, "msg": str(e), "trace": error_trace}
+        print(f"处理API请求时出错: {str(e)}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"服务器错误: {str(e)}")
+
+
 # Main entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cloudflare bypass api")
 
     parser.add_argument("--nolog", action="store_true", help="Disable logging")
     parser.add_argument("--headless", action="store_true", help="Run in headless mode")
+    parser.add_argument("--config", type=str, help="Path to config file")
 
     args = parser.parse_args()
     display = None
@@ -695,4 +837,12 @@ if __name__ == "__main__":
     else:
         log = True
 
-    uvicorn.run(app, host="0.0.0.0", port=SERVER_PORT)
+    # 初始化数据库和缓存
+    print('配置文件路径', args.config)
+    init_database_and_cache(args.config)
+
+    # 获取服务器端口
+    config = load_config(args.config)
+    server_port = config['server']['port'] if config and 'server' in config else 8889
+
+    uvicorn.run(app, host="0.0.0.0", port=server_port)
