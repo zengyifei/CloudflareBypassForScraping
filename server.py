@@ -124,7 +124,7 @@ else:
     browser_path = "/usr/bin/google-chrome"
 
 # 设置 DrissionPage 使用 Edge 浏览器
-if BROWSER_TYPE == "edge":
+if BROWSER_TYPE == "chrome":
     # 使用 DrissionPage 的配置方法设置 Edge
     from DrissionPage import ChromiumOptions
     co = ChromiumOptions()
@@ -424,12 +424,6 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
             # 导航到 URL
             page.get(url)
 
-            # 设置 cookies
-            if cookies:
-                for name, value in cookies.items():
-                    domain = cookie_domain or urlparse(url).netloc
-                    page.set_cookies({name: value}, domain=domain)
-
             # 自动尝试解决 Cloudflare 挑战
             solved = await solve_cloudflare(page)
             if not solved:
@@ -455,6 +449,9 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
                     page_cache[page_key] = page
 
         except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            sys_logger.error(f"创建页面失败: {error_trace}")
             success = False
             error_msg = f"创建页面失败: {str(e)}"
             if page:
