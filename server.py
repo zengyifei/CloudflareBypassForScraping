@@ -1,7 +1,10 @@
 import json
 import re
 import os
+import sys
+import uuid
 from urllib.parse import urlparse
+from datetime import datetime, timedelta
 
 from CloudflareBypasser import CloudflareBypasser
 from DrissionPage import ChromiumPage, ChromiumOptions
@@ -19,12 +22,53 @@ import atexit
 import asyncio
 import websockets
 import json
-from datetime import datetime
+
+# 添加loguru用于日志记录
+from loguru import logger
+# 添加slowapi用于请求限速
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from models import JsReverseConfig, website_configs, init_db
 from internal_api import router as internal_api_router, verify_credentials
-from db import load_config, init_database_and_cache, get_db_session
+from db import load_config, init_database_and_cache, get_db_session, get_redis_client, redis_prefix
 import hashlib
+
+# 配置日志系统
+LOG_DIR = os.path.join(os.getcwd(), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# 移除默认的logger配置
+logger.remove()
+# 添加控制台输出
+logger.add(sys.stderr, level="INFO")
+# 添加按天存储的文件日志，保留7天
+logger.add(
+    os.path.join(LOG_DIR, "anti_js_{time:YYYY-MM-DD}.log"),
+    rotation="00:00",  # 每天午夜轮转
+    retention=timedelta(days=7),  # 保留7天的日志
+    level="INFO",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} [{level}][{extra[request_id]}] {message}",
+    filter=lambda record: "request_id" in record["extra"]
+)
+
+# 为没有request_id的日志添加单独的格式
+logger.add(
+    os.path.join(LOG_DIR, "system_{time:YYYY-MM-DD}.log"),
+    rotation="00:00",  # 每天午夜轮转
+    retention=timedelta(days=7),  # 保留7天的日志
+    level="INFO",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} [{level}][SYSTEM] | {message}",
+    filter=lambda record: "request_id" not in record["extra"]
+)
+
+# 系统日志辅助函数
+sys_logger = logger.bind(request_id="SYSTEM")
+
+# 设置请求限速器，1秒最多10个请求
+limiter = Limiter(key_func=get_remote_address, default_limits=["10/second"])
 
 # Check if running in Docker mode
 # 检测操作系统类型，如果是Linux则设置为true，否则为false
@@ -73,7 +117,7 @@ if BROWSER_TYPE == "edge":
             break
 
     if not browser_path:
-        print("Warning: Microsoft Edge not found, using default browser")
+        sys_logger.warning("Microsoft Edge not found, using default browser")
         browser_path = "/usr/bin/google-chrome"  # 默认路径
 else:
     browser_path = "/usr/bin/google-chrome"
@@ -87,6 +131,12 @@ if BROWSER_TYPE == "edge":
     co.save()  # 保存配置，这样后续启动都会使用这个设置
 
 app = FastAPI()
+
+# 添加请求限速异常处理
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+# 添加请求限速中间件
+app.add_middleware(SlowAPIMiddleware)
 
 # 添加CORS中间件
 app.add_middleware(
@@ -225,11 +275,11 @@ async def get_html(url: str, retries: int = 5, proxy: str = None):
 
 
 # Get or create browser instance
-def get_or_create_browser(browser_id: str, proxy: str = None) -> ChromiumPage:
+def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = None) -> ChromiumPage:
     if browser_id in browser_cache:
         return browser_cache[browser_id]
 
-    options = ChromiumOptions().auto_port()
+    options = ChromiumOptions().auto_port().no_imgs()
     # options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
         options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
@@ -244,6 +294,8 @@ def get_or_create_browser(browser_id: str, proxy: str = None) -> ChromiumPage:
         options.set_proxy(proxy)
 
     driver = ChromiumPage(addr_or_opts=options)
+    if init_js:
+        driver.add_init_js(init_js)
     browser_cache[browser_id] = driver
     return driver
 
@@ -255,7 +307,7 @@ async def solve_cloudflare(page: ChromiumPage, retries: int = 5, log: bool = Tru
         cf_bypasser.bypass()
         return True
     except Exception as e:
-        print(f"Cloudflare bypass error: {str(e)}")
+        sys_logger.error(f"Cloudflare bypass error: {str(e)}")
         return False
 
 
@@ -281,11 +333,11 @@ def cleanup_page(page, page_key=None, browser_id=None):
                     # 如果都失败，尝试使用 JavaScript 关闭
                     page.run_js('window.close()')
         except Exception as e:
-            print(f"关闭标签页时出错: {str(e)}")
+            sys_logger.error(f"关闭标签页时出错: {str(e)}")
 
 
 # 修改获取或创建页面的函数，处理浏览器连接断开的情况
-async def get_or_create_page(page_key: str = None, browser_id: str = "default", url: str = None, cookies: Dict[str, str] = None, cookie_domain: str = None, snapshot: bool = False):
+async def get_or_create_page(page_key: str = None, browser_id: str = "default", url: str = None, init_js: str = None, cookies: Dict[str, str] | str = None, cookie_domain: str = None, snapshot: bool = False):
     """
     获取或创建页面，处理页面连接断开等异常情况，自动解决 Cloudflare 挑战
     """
@@ -304,7 +356,7 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
             # 使用一个简单的操作来测试页面连接
             page.run_js('1+1')
         except Exception as e:
-            print(f"检测到页面连接已断开，重新创建页面: {str(e)}")
+            sys_logger.info(f"检测到页面连接已断开，重新创建页面: {str(e)}")
             # 清理旧页面
             cleanup_page(page, page_key, browser_id)
             # 将页面设为 None，下面会重新创建
@@ -324,7 +376,7 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
                     # 测试浏览器连接
                     browser.run_js('1+1')
                 except Exception as e:
-                    print(f"检测到浏览器连接已断开，重新创建浏览器: {str(e)}")
+                    sys_logger.info(f"检测到浏览器连接已断开，重新创建浏览器: {str(e)}")
                     # 从缓存中移除
                     if browser_id in browser_cache:
                         try:
@@ -336,10 +388,14 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
 
             # 如果浏览器不存在或连接断开，创建新浏览器
             if browser is None:
-                browser = get_or_create_browser(browser_id)
+                browser = get_or_create_browser(browser_id, init_js=init_js)
 
             # 创建新标签页
             page = browser.new_tab()
+            if cookies:
+                page.set.cookies(cookies)
+            if init_js:
+                sys_logger.info('script_id', page.add_init_js(init_js))
             # 导航到 URL
             page.get(url)
 
@@ -363,7 +419,7 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
                         with open(f'screenshot/{urlparse(url).netloc}.html', "w", encoding="utf-8") as f:
                             f.write(page.html)
                     except Exception as e:
-                        print(f"截图失败: {str(e)}")
+                        sys_logger.error(f"截图失败: {str(e)}")
 
                 # 清理资源
                 cleanup_page(page, page_key, browser_id)
@@ -451,15 +507,15 @@ async def chrome_request(req: ChromeRequest):
                    json.dumps(req.body) if req.body else "null", req.url)
 
             # 打印请求信息
-            print(f"API Request: {req.method} {req.api_url}")
-            print(f"Headers: {json.dumps(headers)[:200]}{'...' if len(json.dumps(headers)) > 200 else ''}")
+            sys_logger.info(f"API Request: {req.method} {req.api_url}")
+            sys_logger.info(f"Headers: {json.dumps(headers)[:200]}{'...' if len(json.dumps(headers)) > 200 else ''}")
             if req.body:
-                print(f"Body: {req.body[:200]}{'...' if len(req.body) > 200 else ''}")
+                sys_logger.info(f"Body: {req.body[:200]}{'...' if len(req.body) > 200 else ''}")
 
             resp_data = page.run_js(script)
 
             # 打印响应数据
-            print(f"API Response: {resp_data[:500]}{'...' if len(resp_data) > 500 else ''}")
+            sys_logger.info(f"API Response: {resp_data[:500]}{'...' if len(resp_data) > 500 else ''}")
 
             resp_obj = resp_data
 
@@ -474,7 +530,7 @@ async def chrome_request(req: ChromeRequest):
 
         # 如果不需要缓存页面，则清理
         if not page_key:
-            print('关闭页面', req.browser_id, req.browser_id not in browser_cache)
+            sys_logger.info('关闭页面', req.browser_id, req.browser_id not in browser_cache)
             cleanup_page(page, page_key, req.browser_id)
 
         return resp_obj
@@ -482,7 +538,7 @@ async def chrome_request(req: ChromeRequest):
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        print(f"Error in chrome_request: {error_trace}")
+        sys_logger.error(f"Error in chrome_request: {error_trace}")
 
         # 如果需要截图
         if req.snapshot and page:
@@ -492,7 +548,7 @@ async def chrome_request(req: ChromeRequest):
                 with open(f'screenshot/error_{urlparse(req.url).netloc}.html', "w", encoding="utf-8") as f:
                     f.write(page.html)
             except Exception as screenshot_error:
-                print(f"Error taking screenshot: {str(screenshot_error)}")
+                sys_logger.error(f"Error taking screenshot: {str(screenshot_error)}")
 
         # 清理资源
         cleanup_page(page, page_key, req.browser_id)
@@ -500,7 +556,7 @@ async def chrome_request(req: ChromeRequest):
         return {"ok": False, "msg": str(e), "trace": error_trace}
 
 
-async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, column_number=0, target_func_name="targetFunction", export_func_name="exposedFunction"):
+async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, column_number=0, target_func_name="targetFunction", export_func_name="exposedFunction", trigger_js=None):
     # 初始化 ws 变量为 None，确保在 finally 块中可以安全引用
     ws = None
 
@@ -509,16 +565,16 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
     target_info = page.run_cdp("Target.getTargetInfo")
     target_id = target_info.get('targetInfo', {}).get('targetId')
     if not target_id:
-        print("无法获取目标ID")
+        sys_logger.error("无法获取目标ID")
         return False
 
     # 构建WebSocket URL
     ws_url = f"ws://{page.address}/devtools/page/{target_id}"
-    print(f"连接DevTools WebSocket: {ws_url}")
+    # sys_logger.info(f"连接DevTools WebSocket: {ws_url}")
     try:
         # 移除 timeout 参数，使其兼容 Python 3.10
         ws = await websockets.connect(ws_url)
-        print("WebSocket连接已打开")
+        # sys_logger.info("WebSocket连接已打开")
         # 启用调试器
         await ws.send(json.dumps({
             "id": 1,
@@ -535,6 +591,8 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
             }
         }))
 
+        if trigger_js:
+            page.run_js(trigger_js, as_expr=True)
         # print("监听消息")
         # --- 第二阶段：监听消息直到满足条件 ---
         trigger_received = False
@@ -586,18 +644,18 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                     }))
 
     except asyncio.TimeoutError:
-        print("操作超时，强制关闭连接")
+        sys_logger.error("操作超时，强制关闭连接")
     except websockets.exceptions.ConnectionClosed as e:
-        print(f"连接异常关闭: {e.code} {e.reason}")
+        sys_logger.error(f"连接异常关闭: {e.code} {e.reason}")
     except Exception as e:
-        print(f"未知错误: {str(e)}")
+        sys_logger.error(f"未知错误: {str(e)}")
     finally:
         # 安全地关闭 WebSocket 连接
         if ws is not None:
             try:
                 await ws.close()
             except Exception as e:
-                print(f"关闭 WebSocket 连接时出错: {str(e)}")
+                sys_logger.error(f"关闭 WebSocket 连接时出错: {str(e)}")
 
     return True
 
@@ -642,7 +700,7 @@ async def debank_sign(req: DebankRequest):
         if not has_debank_sign:
             await setup_breakpoint_and_expose_function(page, "https://assets.debank.com/static/js/6129.fbaacfcf.chunk.js", line_number=1, column_number=45827, target_func_name=target_func_name, export_func_name=export_func_name)
             has_debank_sign = page.run_js(check_script, as_expr=True)
-            print(has_debank_sign, 'script', check_script)
+            # sys_logger.info(has_debank_sign, 'script', check_script)
         if not has_debank_sign:
             raise Exception("window.debank_sign 函数不存在，暂不支持此操作")
 
@@ -686,7 +744,7 @@ async def debank_sign(req: DebankRequest):
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
-        print(f"Debank API 错误: {error_trace}")
+        sys_logger.error(f"Debank API 错误: {error_trace}")
 
         # 清理资源（只有当 page 不为 None 时才清理）
         if page:
@@ -710,67 +768,148 @@ class AntiJsRequest(BaseModel):
 
 
 @app.post("/api/antijs/{api_name}")
-async def anti_js(api_name: str, request: AntiJsRequest):
+@limiter.limit("10/second", key_func=lambda request: f"api:{request.path_params['api_name']}")
+async def anti_js(api_name: str, data: AntiJsRequest, request: Request):
     """接收数据并根据API名称处理"""
+    # 生成请求ID
+    request_id = str(uuid.uuid4())
+    # 创建请求上下文的logger
+    log = logger.bind(request_id=request_id)
 
+    # 记录请求开始
+    log.info(f"/antijs/{api_name}")
+
+    start_time = datetime.now()
     page = None  # 初始化 page 变量为 None
+    page_key = None  # 初始化 page_key 变量为 None
+    browser_id = "default"  # 设置默认 browser_id
+
     try:
         # 从内存中获取配置
         config = website_configs.get_by_api_name(api_name)
         if not config:
-            # 配置不存在，返回403
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无效的API名称")
+            # 配置不存在，返回错误信息
+            return JSONResponse(
+                status_code=200,
+                content={"code": 1, "msg": "API不存在"}
+            )
 
         # 检查参数长度限制（如果设置了）
-        if config.get('params_len') is not None and len(request.data) != config['params_len']:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(request.data)}"
+        if config.get('params_len') is not None and len(data.data) != config['params_len']:
+            log.error(f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(data.data)}")
+            return JSONResponse(
+                status_code=200,
+                content={"code": 1, "msg": f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(data.data)}"}
             )
+
         # 检查配置是否过期
         if config.get('expire_time'):
             expire_time = config['expire_time']
             if isinstance(expire_time, str):
                 expire_time = datetime.strptime(expire_time, '%Y-%m-%d %H:%M:%S')
             if datetime.now() > expire_time:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="API已过期"
+                log.error("API已过期")
+                return JSONResponse(
+                    status_code=200,
+                    content={"code": 1, "msg": "API已过期"}
                 )
 
         # 检查最大调用次数限制
         if config.get('max_calls') is not None:
-            # 这里需要实现调用次数的计数逻辑
-            # 可以使用数据库或缓存来跟踪调用次数
-            pass
+            # 使用Redis跟踪API调用次数
+            redis_client = get_redis_client()
+
+            if redis_client:
+                # 使用api_name作为Redis键的一部分
+                redis_key = f"{redis_prefix}call_count:{api_name}"
+
+                # 获取当前调用次数
+                current_count = redis_client.get(redis_key)
+                current_count = int(current_count) if current_count else 0
+
+                # 检查是否超过最大调用次数
+                if current_count >= config['max_calls']:
+                    log.error("可用次数已用完")
+                    return JSONResponse(
+                        status_code=200,
+                        content={"code": 1, "msg": "可用次数已用完"}
+                    )
+
+                # 增加调用计数（使用pipeline确保原子性）
+                pipe = redis_client.pipeline()
+                pipe.incr(redis_key)
+                # 默认30天后过期（可以根据需要调整）
+                pipe.expire(redis_key, 60 * 60 * 24 * 30)
+
+                # 执行Redis命令
+                pipe.execute()
 
         # 对source_website做MD5处理
         page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
-        print(f"网站MD5: {page_key}")
-        browser_id = "default"
+
+        init_js = """
+Function.prototype.temp_constructor= Function.prototype.constructor;
+Function.prototype.constructor=function(){
+    if (arguments && typeof arguments[0]==="string"){
+    if (arguments[0]==="debugger")
+        return ""
+    }
+    return Function.prototype.temp_constructor.apply(this, arguments);
+};
+        """
+        if not config.get('override_funcs'):
+            config['override_funcs'] = 'all'
+        for method in config['override_funcs'].split(','):
+            if method == 'all' or method == 'setTimeout':
+                init_js += """
+window.setTimeout = (callback, delay) => {
+    return 0
+};
+"""
+            if method == 'all' or method == 'setInterval':
+                init_js += """
+window.setInterval = (callback, delay) => {
+    return 0
+};
+"""
+
         # 获取或创建页面
         page, is_new, success, error_msg = await get_or_create_page(
             page_key=page_key,
             browser_id=browser_id,
+            init_js=init_js,
+            cookies=config.get('cookies'),
             url=config['source_website'] if not page_key in page_cache else None
         )
 
         if not success:
-            return {"ok": False, "msg": error_msg}
+            log.error(f"页面创建失败: {error_msg}")
+            return JSONResponse(
+                status_code=200,
+                content={"code": 1, "msg": "服务器内部错误"}
+            )
 
         if not page:
-            return {"ok": False, "msg": "Failed to create page"}
+            log.error("页面为空")
+            return JSONResponse(
+                status_code=200,
+                content={"code": 1, "msg": "服务器内部错误"}
+            )
 
         inject_func_name = "___" + api_name
-        # 检查 window.debank_sign 函数是否存在
+        # 检查函数是否存在
         check_script = """typeof window.""" + inject_func_name + """ === 'function'"""
         injected = page.run_js(check_script, as_expr=True)
         if not injected:
-            await setup_breakpoint_and_expose_function(page, config['hijack_js_url'], line_number=config['breakpoint_line_num'], column_number=config['breakpoint_col_num'], target_func_name=config['target_func'], export_func_name=inject_func_name)
+            await setup_breakpoint_and_expose_function(page, config['hijack_js_url'], line_number=config['breakpoint_line_num'], column_number=config['breakpoint_col_num'], target_func_name=config['target_func'], export_func_name=inject_func_name, trigger_js=config['trigger_js'])
             injected = page.run_js(check_script, as_expr=True)
-            print(injected, 'script', check_script)
         if not injected:
-            raise Exception("注入失败")
+            log.error(f"函数注入失败")
+            cleanup_page(page, page_key, browser_id)
+            return JSONResponse(
+                status_code=500,
+                content={"code": 1, "msg": "调用失败, 请稍后重试。如一直不成功, 请联系管理员"}
+            )
 
         sign_script = """
                 try {
@@ -780,36 +919,44 @@ async def anti_js(api_name: str, request: AntiJsRequest):
                 } catch (e) {
                     return {"__error__": e.toString()};
                 }
-        """ % (json.dumps(request.data))
-        print('sign_script', sign_script)
+        """ % (json.dumps(data.data))
 
         sign_result = page.run_js(sign_script)
-        print('sign_result', sign_result)
 
         # 检查结果是否包含错误
         if isinstance(sign_result, dict) and '__error__' in sign_result:
-            # 清理资源
-            if not page_key:
-                cleanup_page(page, page_key, browser_id)
-            return {"ok": False, "msg": f"调用失败: {sign_result['__error__']}"}
+            log.error(f"执行脚本出错: {sign_result['__error__']}")
+            return JSONResponse(
+                status_code=200,
+                content={"code": 1, "msg": "调用失败, 目标函数报错: " + sign_result['__error__']}
+            )
+
+        # 计算请求处理时间
+        elapsed_time = (datetime.now() - start_time).total_seconds() * 1000
+        log.info(f"succ, elapsed[{elapsed_time:.2f}ms]")
 
         # 返回 API 调用结果和签名信息
-        return {"ok": True, "data": sign_result}
-        # # 打印接收到的数据（未来可以替换为实际处理逻辑）
-        # formatted_data = json.dumps(request.data, ensure_ascii=False, indent=2)
-        # print(f"接收到API请求 [{api_name}]: {formatted_data}")
+        return JSONResponse(
+            status_code=200,
+            content={"code": 0, "msg": "成功", "data": sign_result}
+        )
 
-        # 返回成功响应
-        # return {"success": True, "api_name": api_name, "message": "数据接收成功"}
-    except HTTPException:
-        raise
     except Exception as e:
+        # 计算请求处理时间
+        elapsed_time = (datetime.now() - start_time).total_seconds() * 1000
         # 清理资源（只有当 page 不为 None 时才清理）
         if page:
             cleanup_page(page, page_key, browser_id)
-            # return {"ok": False, "msg": str(e), "trace": error_trace}
-        print(f"处理API请求时出错: {str(e)}")
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"服务器错误: {str(e)}")
+
+        # 记录详细错误信息
+        import traceback
+        error_trace = traceback.format_exc()
+        log.error(f"处理请求异常 | 耗时: {elapsed_time:.2f}ms | 错误: {str(e)}\n{error_trace}")
+
+        return JSONResponse(
+            status_code=200,
+            content={"code": 1, "msg": "服务器内部错误"}
+        )
 
 
 # Main entry point
@@ -837,12 +984,13 @@ if __name__ == "__main__":
     else:
         log = True
 
-    # 初始化数据库和缓存
-    print('配置文件路径', args.config)
-    init_database_and_cache(args.config)
-
-    # 获取服务器端口
-    config = load_config(args.config)
-    server_port = config['server']['port'] if config and 'server' in config else 8889
+    server_port = 8889
+    if args.config:
+        # 初始化数据库和缓存
+        sys_logger.info(f'配置文件路径: {args.config}')
+        init_database_and_cache(args.config)
+        # 获取服务器端口
+        config = load_config(args.config)
+        server_port = config['server']['port'] if config and 'server' in config else 8889
 
     uvicorn.run(app, host="0.0.0.0", port=server_port)

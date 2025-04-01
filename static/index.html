@@ -253,6 +253,8 @@
                             <th>参数长度</th>
                             <th>过期时间</th>
                             <th>最大调用次数</th>
+                            <th>已调用/剩余</th>
+                            <th>覆盖函数</th>
                             <th>状态</th>
                             <th>操作</th>
                         </tr>
@@ -329,6 +331,21 @@
                                     激活状态（勾选后配置会加载到内存中）
                                 </label>
                             </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label">覆盖函数</label>
+                            <input type="text" class="form-control" id="overrideFuncs" placeholder="setTimeout,setInterval" value="setTimeout,setInterval">
+                            <small class="text-muted">要覆盖的JavaScript函数，用逗号分隔</small>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">触发JS</label>
+                            <textarea class="form-control" id="triggerJs" rows="3" placeholder="在页面加载时执行的JavaScript代码"></textarea>
+                            <small class="text-muted">页面加载时要执行的自定义JavaScript代码</small>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label">Cookies</label>
+                            <textarea class="form-control" id="cookies" rows="3" placeholder='name1=value1; name2=value2; domain=.example.com'></textarea>
+                            <small class="text-muted">设置页面的Cookies，使用标准Cookie字符串格式，如：name1=value1; name2=value2; domain=.example.com</small>
                         </div>
                         <div class="col-12">
                             <label class="form-label">描述</label>
@@ -434,15 +451,16 @@
                 .slice(0, 19);
         }
 
-        function showEditModal(config) {
+        async function showEditModal(config) {
+            // 重置表单
+            document.getElementById('configForm').reset();
+            
+            // 设置当前模式
             currentMode = 'edit';
-            document.getElementById('modalTitle').textContent = '编辑配置';
+            
+            // 填充表单数据
             document.getElementById('configId').value = config.id;
-            
-            // 显示API名称（只读）
-            document.getElementById('apiNameRow').style.display = 'block';
             document.getElementById('apiName').value = config.api_name;
-            
             document.getElementById('userName').value = config.user_name;
             document.getElementById('sourceWebsite').value = config.source_website;
             document.getElementById('hijackJsUrl').value = config.hijack_js_url;
@@ -450,54 +468,72 @@
             document.getElementById('breakpointColNum').value = config.breakpoint_col_num;
             document.getElementById('targetFunc').value = config.target_func;
             document.getElementById('paramsLen').value = config.params_len || '';
-            document.getElementById('description').value = config.description || '';
             
-            // 处理参数示例，格式化显示
-            if (config.params_example) {
-                try {
-                    const exampleObj = JSON.parse(config.params_example);
-                    document.getElementById('paramsExample').value = JSON.stringify(exampleObj, null, 2);
-                } catch (e) {
-                    document.getElementById('paramsExample').value = config.params_example;
-                }
-            } else {
-                document.getElementById('paramsExample').value = '';
-            }
-            
-            // 处理过期时间，可能为null
+            // 处理过期时间
             if (config.expire_time) {
-                const expireDate = new Date(config.expire_time.replace(' ', 'T'));
-                document.getElementById('expireTime').value = formatDateTimeLocal(expireDate);
+                const date = new Date(config.expire_time);
+                document.getElementById('expireTime').value = formatDateTimeLocal(date);
             } else {
                 document.getElementById('expireTime').value = '';
             }
             
             document.getElementById('maxCalls').value = config.max_calls || '';
-            document.getElementById('isActive').checked = config.is_active !== false;
+            document.getElementById('overrideFuncs').value = config.override_funcs || 'setTimeout,setInterval';
+            
+            // 添加对params_example的JSON美化处理
+            if (config.params_example) {
+                try {
+                    // 尝试解析并美化JSON
+                    const parsedParams = JSON.parse(config.params_example);
+                    document.getElementById('paramsExample').value = JSON.stringify(parsedParams, null, 2);
+                } catch (e) {
+                    // 如果解析失败，直接使用原始字符串
+                    document.getElementById('paramsExample').value = config.params_example || '';
+                }
+            } else {
+                document.getElementById('paramsExample').value = '';
+            }
+            
+            document.getElementById('triggerJs').value = config.trigger_js || '';
+            document.getElementById('cookies').value = config.cookies || '';
+            document.getElementById('description').value = config.description || '';
+            document.getElementById('isActive').checked = config.is_active;
+            
+            // 显示API名称行
+            document.getElementById('apiNameRow').style.display = 'block';
+            
+            // 设置标题
+            document.getElementById('modalTitle').textContent = '编辑配置';
+            
+            // 显示模态框
             configModal.show();
         }
 
-        function showTestModal(config) {
-            document.getElementById('testApiName').value = config.api_name;
-            document.getElementById('testResult').textContent = '';
+        async function showTestModal(config) {
+            const modal = document.getElementById('testModal');
+            // 设置当前测试的API名称
             currentTestApiName = config.api_name;
+            // 替换原有的不存在的元素引用
+            document.getElementById('testApiName').value = config.api_name || `配置 #${config.id}`;
             
-            // 根据参数长度生成示例参数
-            let sampleParams = [];
-            if (config.params_len) {
-                for (let i = 0; i < config.params_len; i++) {
-                    sampleParams.push(`参数${i+1}`);
-                }
-            } else {
-                sampleParams = ["示例参数1", "示例参数2"];
-            }
-            // 处理参数示例，格式化显示
+            // 如果有参数示例，自动填充到测试参数
             if (config.params_example) {
                 try {
-                    sampleParams = JSON.parse(config.params_example);
-                } catch (e) {}
+                    // 尝试解析并美化JSON
+                    const parsedParams = JSON.parse(config.params_example);
+                    document.getElementById('testParams').value = JSON.stringify(parsedParams, null, 2);
+                } catch (e) {
+                    // 如果解析失败，直接使用原始字符串
+                    document.getElementById('testParams').value = config.params_example;
+                }
+            } else {
+                document.getElementById('testParams').value = '[]';
             }
-            document.getElementById('testParams').value = JSON.stringify(sampleParams, null, 2);
+            
+            // 清空测试结果
+            document.getElementById('testResult').textContent = '';
+            
+            // 显示模态框
             testModal.show();
         }
 
@@ -533,7 +569,8 @@
                 const result = await response.json();
                 resultField.textContent = JSON.stringify(result, null, 2);
                 
-                if (response.ok) {
+                // 根据新的返回格式判断成功失败
+                if (result.code === 0) {
                     resultField.className = 'form-control text-success';
                 } else {
                     resultField.className = 'form-control text-danger';
@@ -550,27 +587,42 @@
         async function loadConfigs() {
             try {
                 showLoading();
-                const response = await fetch('/internal/api/configs', {
-                    credentials: 'include'
-                });
+                
+                // 获取配置列表（现在已包含调用次数信息）
+                const response = await fetch('/internal/api/configs', { credentials: 'include' });
                 
                 if (response.status === 401) {
                     window.location.href = '/admin';
                     return;
                 }
-
-                const result = await response.json();
+                
+                const configs = await response.json();
                 
                 if (!response.ok) {
-                    throw new Error(result.detail || '加载失败');
+                    throw new Error((await response.json()).detail || '加载配置失败');
                 }
-
-                const configs = result;
+                
                 const tbody = document.getElementById('configTable');
                 tbody.innerHTML = '';
                 
+                // 直接渲染列表，配置中已包含调用次数数据
                 configs.forEach(config => {
                     const tr = document.createElement('tr');
+                    
+                    // 根据调用次数百分比设置样式
+                    let usageStatus = '';
+                    if (config.max_calls) {
+                        const percentage = config.call_percentage || 0;
+                        
+                        if (percentage >= 90) {
+                            usageStatus = '<span class="badge bg-danger">即将耗尽</span>';
+                        } else if (percentage >= 70) {
+                            usageStatus = '<span class="badge bg-warning">使用中</span>';
+                        } else {
+                            usageStatus = '<span class="badge bg-info">正常</span>';
+                        }
+                    }
+                    
                     tr.innerHTML = `
                         <td>${config.id}</td>
                         <td>${config.api_name}</td>
@@ -583,6 +635,16 @@
                         <td>${config.params_len || '-'}</td>
                         <td>${config.expire_time || '-'}</td>
                         <td>${config.max_calls || '-'}</td>
+                        <td>
+                            ${config.max_calls ? 
+                                `${config.call_count || 0}/${config.max_calls} ${usageStatus}
+                                <div class="progress" style="height: 5px;">
+                                    <div class="progress-bar ${(config.call_percentage || 0) >= 90 ? 'bg-danger' : (config.call_percentage || 0) >= 70 ? 'bg-warning' : 'bg-success'}" 
+                                        style="width: ${config.call_percentage || 0}%"></div>
+                                </div>` 
+                                : '-'}
+                        </td>
+                        <td>${config.override_funcs || 'setTimeout,setInterval'}</td>
                         <td>${config.is_active ? '<span class="badge bg-success">激活</span>' : '<span class="badge bg-secondary">禁用</span>'}</td>
                         <td>
                             <button class="btn btn-primary btn-action" onclick='showEditModal(${JSON.stringify(config)})' title="编辑">
@@ -609,20 +671,42 @@
         async function saveConfig() {
             try {
                 showLoading();
-                
-                // 处理参数示例，移除多余空格
-                let paramsExample = document.getElementById('paramsExample').value.trim();
-                if (paramsExample) {
-                    try {
-                        // 解析并重新序列化以移除多余空格
-                        paramsExample = JSON.stringify(JSON.parse(paramsExample));
-                    } catch (e) {
-                        showError('参数示例格式错误，请输入有效的JSON');
+
+                // 验证必填字段
+                const requiredFields = ['userName', 'sourceWebsite', 'hijackJsUrl', 'breakpointLineNum', 'breakpointColNum', 'targetFunc'];
+                for (const field of requiredFields) {
+                    const element = document.getElementById(field);
+                    if (!element.value.trim()) {
+                        alert(`请填写${element.labels[0].textContent.replace(' *', '')}`);
+                        element.focus();
+                        hideLoading();
                         return;
                     }
                 }
+
+                // 处理参数示例JSON格式
+                let paramsExample = document.getElementById('paramsExample').value.trim();
+                if (paramsExample) {
+                    try {
+                        JSON.parse(paramsExample);
+                    } catch (e) {
+                        alert('参数示例格式错误，请输入有效的JSON');
+                        document.getElementById('paramsExample').focus();
+                        hideLoading();
+                        return;
+                    }
+                }
+
+                // cookies已改为字符串格式，不需要检查JSON格式
+                let cookies = document.getElementById('cookies').value.trim();
+
+                let expireTime = null;
+                const expireTimeInput = document.getElementById('expireTime').value;
+                if (expireTimeInput) {
+                    expireTime = formatDateTime(new Date(expireTimeInput));
+                }
                 
-                const formData = {
+                const config = {
                     user_name: document.getElementById('userName').value,
                     source_website: document.getElementById('sourceWebsite').value,
                     hijack_js_url: document.getElementById('hijackJsUrl').value,
@@ -631,13 +715,15 @@
                     target_func: document.getElementById('targetFunc').value,
                     params_len: document.getElementById('paramsLen').value ? parseInt(document.getElementById('paramsLen').value) : null,
                     params_example: paramsExample || null,
-                    expire_time: document.getElementById('expireTime').value ? formatDateTime(document.getElementById('expireTime').value) : null,
+                    expire_time: expireTime,
                     max_calls: document.getElementById('maxCalls').value ? parseInt(document.getElementById('maxCalls').value) : null,
                     is_active: document.getElementById('isActive').checked,
-                    description: document.getElementById('description').value || null
+                    description: document.getElementById('description').value || null,
+                    override_funcs: document.getElementById('overrideFuncs').value,
+                    trigger_js: document.getElementById('triggerJs').value || null,
+                    cookies: cookies || null
                 };
 
-                // 根据当前模式决定URL和请求方法
                 let url = '/internal/api/configs';
                 let method = 'POST';
                 
@@ -645,30 +731,29 @@
                     const configId = document.getElementById('configId').value;
                     url = `/internal/api/configs/${configId}`;
                     method = 'PUT';
+                    config.id = parseInt(configId);
+                    config.api_name = document.getElementById('apiName').value;
                 }
-                
+
                 const response = await fetch(url, {
                     method: method,
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    credentials: 'include',
-                    body: JSON.stringify(formData)
+                    body: JSON.stringify(config),
+                    credentials: 'include'
                 });
-
-                if (response.status === 401) {
-                    window.location.href = '/admin';
-                    return;
-                }
 
                 const result = await response.json();
                 
                 if (!response.ok) {
                     throw new Error(result.detail || '保存失败');
                 }
-
+                
+                // alert(currentMode === 'add' ? '添加成功！' : '更新成功！');
                 configModal.hide();
                 loadConfigs();
+                
             } catch (error) {
                 console.error('保存配置失败:', error);
                 alert('保存失败: ' + error.message);

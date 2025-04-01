@@ -5,5 +5,12 @@ mysql:
     password: Cd32d5e86e
     database: test
 
+redis:
+    host: localhost
+    port: 6379
+    db: 0
+    password: # 留空表示无密码
+    prefix: 'antijs:' # 键前缀
+
 server:
     port: 8889

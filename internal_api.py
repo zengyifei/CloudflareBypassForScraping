@@ -5,7 +5,9 @@ from datetime import datetime, timedelta
 import traceback
 import secrets
 from models import JsReverseConfig, website_configs, generate_random_api_name
-from db import get_db_session
+from db import get_db_session, get_redis_client, redis_prefix
+import json
+import yaml
 
 # 基本认证
 security = HTTPBasic()
@@ -60,25 +62,45 @@ def validate_expire_time(expire_time_str: str) -> datetime:
 async def get_configs(username: str = Depends(verify_credentials)):
     try:
         db_session = get_db_session()
+        redis_client = get_redis_client()
+
         if db_session:
             try:
                 configs = db_session.query(JsReverseConfig).all()
-                return [{
-                    'id': c.id,
-                    'user_name': c.user_name,
-                    'source_website': c.source_website,
-                    'hijack_js_url': c.hijack_js_url,
-                    'breakpoint_line_num': c.breakpoint_line_num,
-                    'breakpoint_col_num': c.breakpoint_col_num,
-                    'target_func': c.target_func,
-                    'expire_time': c.expire_time.strftime('%Y-%m-%d %H:%M:%S') if c.expire_time else None,
-                    'max_calls': c.max_calls,
-                    'is_active': c.is_active,
-                    'params_len': c.params_len,
-                    'description': c.description,
-                    'api_name': c.api_name,
-                    'params_example': c.params_example
-                } for c in configs]
+                config_list = []
+
+                for c in configs:
+                    config_dict = {
+                        'id': c.id,
+                        'user_name': c.user_name,
+                        'source_website': c.source_website,
+                        'hijack_js_url': c.hijack_js_url,
+                        'breakpoint_line_num': c.breakpoint_line_num,
+                        'breakpoint_col_num': c.breakpoint_col_num,
+                        'target_func': c.target_func,
+                        'expire_time': c.expire_time.strftime('%Y-%m-%d %H:%M:%S') if c.expire_time else None,
+                        'max_calls': c.max_calls,
+                        'is_active': c.is_active,
+                        'params_len': c.params_len,
+                        'description': c.description,
+                        'api_name': c.api_name,
+                        'params_example': c.params_example,
+                        'override_funcs': c.override_funcs,
+                        'trigger_js': c.trigger_js,
+                        'cookies': c.cookies,
+                    }
+
+                    # 如果设置了最大调用次数且Redis可用，获取调用次数信息
+                    if c.max_calls is not None and redis_client:
+                        redis_key = f"{redis_prefix}call_count:{c.api_name}"
+                        current_count = redis_client.get(redis_key)
+                        current_count = int(current_count) if current_count else 0
+                        config_dict['call_count'] = current_count
+                        config_dict['call_percentage'] = round(current_count / c.max_calls * 100, 2) if c.max_calls > 0 else 0
+
+                    config_list.append(config_dict)
+
+                return config_list
             except Exception as e:
                 error_trace = traceback.format_exc()
                 print(f"数据库查询失败: {str(e)}\n{error_trace}")
@@ -155,7 +177,10 @@ async def create_config(config: Dict[str, Any], username: str = Depends(verify_c
             params_len=params_len,
             description=config.get('description', '').strip() if config.get('description') else None,
             params_example=config.get('params_example'),
-            api_name=api_name  # 使用自动生成的api_name
+            api_name=api_name,
+            override_funcs=config.get('override_funcs', 'all'),
+            trigger_js=config.get('trigger_js'),
+            cookies=config.get('cookies'),
         )
 
         # 保存到数据库
@@ -179,7 +204,10 @@ async def create_config(config: Dict[str, Any], username: str = Depends(verify_c
                     'description': new_config.description,
                     'api_name': new_config.api_name,
                     'params_example': new_config.params_example,
-                    'expire_time': new_config.expire_time.strftime('%Y-%m-%d %H:%M:%S') if new_config.expire_time else None
+                    'expire_time': new_config.expire_time.strftime('%Y-%m-%d %H:%M:%S') if new_config.expire_time else None,
+                    'override_funcs': new_config.override_funcs,
+                    'trigger_js': new_config.trigger_js,
+                    'cookies': new_config.cookies,
                 }
                 website_configs.set(new_config.id, cache_data)
 
@@ -274,6 +302,18 @@ async def update_config(config_id: int, config: Dict[str, Any], username: str = 
         if 'description' in config:
             existing_config.description = config['description'].strip() if config['description'] else None
 
+        # 更新 override_funcs
+        if 'override_funcs' in config:
+            existing_config.override_funcs = config['override_funcs']
+
+        # 更新 trigger_js
+        if 'trigger_js' in config:
+            existing_config.trigger_js = config['trigger_js']
+
+        # 更新 cookies
+        if 'cookies' in config:
+            existing_config.cookies = config['cookies']
+
         # 保存更新
         try:
             db_session.commit()
@@ -295,7 +335,10 @@ async def update_config(config_id: int, config: Dict[str, Any], username: str = 
                     'description': existing_config.description,
                     'api_name': existing_config.api_name,
                     'params_example': existing_config.params_example,
-                    'expire_time': existing_config.expire_time.strftime('%Y-%m-%d %H:%M:%S') if existing_config.expire_time else None
+                    'expire_time': existing_config.expire_time.strftime('%Y-%m-%d %H:%M:%S') if existing_config.expire_time else None,
+                    'override_funcs': existing_config.override_funcs,
+                    'trigger_js': existing_config.trigger_js,
+                    'cookies': existing_config.cookies,
                 }
                 website_configs.set(existing_config.id, cache_data)
             elif was_active:
@@ -386,7 +429,10 @@ async def refresh_configs(username: str = Depends(verify_credentials)):
                     'params_len': config.params_len,
                     'description': config.description,
                     'api_name': config.api_name,
-                    'params_example': config.params_example
+                    'params_example': config.params_example,
+                    'override_funcs': config.override_funcs,
+                    'trigger_js': config.trigger_js,
+                    'cookies': config.cookies,
                 }
                 website_configs.set(config.id, config_dict)
 

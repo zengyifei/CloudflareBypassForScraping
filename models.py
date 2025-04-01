@@ -35,6 +35,9 @@ class JsReverseConfig(Base):
     expire_time = Column(DateTime, nullable=True)
     max_calls = Column(Integer, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    override_funcs = Column(String(255), default='setTimeout,setInterval', nullable=True)
+    trigger_js = Column(Text, nullable=True)
+    cookies = Column(Text, nullable=True)
 
     def __repr__(self):
         return f"<JsReverseConfig(id='{self.id}', user_name='{self.user_name}', api_name='{self.api_name}')>"

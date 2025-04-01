@@ -3,9 +3,14 @@ from sqlalchemy.orm import sessionmaker
 import yaml
 import os
 from sqlalchemy.ext.declarative import declarative_base
+import json
+import traceback
+import redis
 
 Base = declarative_base()
 db_session = None
+redis_client = None
+redis_prefix = 'antijs:'
 
 # 从配置文件加载数据库配置
 
@@ -29,6 +34,43 @@ def load_config(config_path=None):
     except Exception as e:
         print(f"加载配置文件失败: {str(e)}")
         return None
+
+
+def init_redis(config=None):
+    """初始化Redis连接"""
+    global redis_client, redis_prefix
+
+    if not config:
+        # 默认配置
+        host = 'localhost'
+        port = 6379
+        db = 0
+        password = None
+    else:
+        # 从配置文件读取
+        host = config['redis'].get('host', 'localhost')
+        port = config['redis'].get('port', 6379)
+        db = config['redis'].get('db', 0)
+        password = config['redis'].get('password') if config['redis'].get('password') else None
+        redis_prefix = config['redis'].get('prefix', 'antijs:')
+
+    try:
+        # 创建Redis连接
+        redis_client = redis.Redis(
+            host=host,
+            port=port,
+            db=db,
+            password=password,
+            decode_responses=True  # 自动将响应解码为字符串
+        )
+        # 测试连接
+        redis_client.ping()
+        print(f"Redis连接成功: {host}:{port}/{db}")
+        return True
+    except Exception as e:
+        print(f"Redis连接失败: {str(e)}")
+        redis_client = None
+        return False
 
 
 def init_database_and_cache(config_path=None):
@@ -59,6 +101,9 @@ def init_database_and_cache(config_path=None):
         if not config:
             print("无法加载配置")
             return False
+
+        # 初始化Redis
+        init_redis(config)
 
         # 创建数据库引擎
         db_url = f"mysql+pymysql://{config['mysql']['user']}:{config['mysql']['password']}@{config['mysql']['host']}:{config['mysql']['port']}/{config['mysql']['database']}"
@@ -94,9 +139,10 @@ def init_database_and_cache(config_path=None):
                     'max_calls': config.max_calls,
                     'is_active': config.is_active,
                     'params_len': config.params_len,
-                    'description': config.description,
                     'api_name': config.api_name,
-                    'params_example': config.params_example
+                    'override_funcs': config.override_funcs,
+                    'trigger_js': config.trigger_js,
+                    'cookies': config.cookies,
                 }
                 website_configs.set(config.id, config_dict)
 
@@ -127,3 +173,9 @@ def get_db_session():
     """获取数据库会话"""
     global db_session
     return db_session
+
+
+def get_redis_client():
+    """获取Redis客户端连接"""
+    global redis_client
+    return redis_client
