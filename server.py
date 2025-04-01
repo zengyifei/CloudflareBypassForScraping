@@ -97,7 +97,8 @@ arguments = [
 ]
 
 # 在文件顶部添加环境变量设置
-BROWSER_TYPE = os.getenv("BROWSER_TYPE", "edge").lower()  # 默认使用 Edge，可以通过环境变量覆盖
+# BROWSER_TYPE = os.getenv("BROWSER_TYPE", "edge").lower()  # 默认使用 Edge，可以通过环境变量覆盖
+BROWSER_TYPE = os.getenv("BROWSER_TYPE", "chrome").lower()  # 默认使用 Edge，可以通过环境变量覆盖
 
 # 根据系统查找 Edge 浏览器路径
 if BROWSER_TYPE == "edge":
