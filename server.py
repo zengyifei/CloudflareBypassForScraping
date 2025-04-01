@@ -449,9 +449,6 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
                     page_cache[page_key] = page
 
         except Exception as e:
-            import traceback
-            error_trace = traceback.format_exc()
-            sys_logger.error(f"创建页面失败: {error_trace}")
             success = False
             error_msg = f"创建页面失败: {str(e)}"
             if page:
