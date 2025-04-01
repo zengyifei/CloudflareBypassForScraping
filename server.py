@@ -219,12 +219,13 @@ def bypass_cloudflare(url: str, retries: int, log: bool, proxy: str = None) -> C
 
     options = ChromiumOptions().auto_port()
     if DOCKER_MODE:
-        options.set_argument("--auto-open-devtools-for-tabs", "true")
         options.set_argument("--remote-debugging-port=9222")
         options.set_argument("--no-sandbox")  # Necessary for Docker
         options.set_argument("--disable-gpu")  # Optional, helps in some cases
+        options.set_argument("-deny-permission-prompts")  # 拒绝权限提示
         options.set_paths(browser_path=browser_path).headless(False)
     else:
+        options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
         options.set_paths(browser_path=browser_path).headless(False)
 
     if proxy:
@@ -279,15 +280,38 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
     if browser_id in browser_cache:
         return browser_cache[browser_id]
 
-    options = ChromiumOptions().auto_port().no_imgs()
+    options = ChromiumOptions().auto_port()
+
+    options.set_argument("--deny-permission-prompts")  # 拒绝权限提示
+    options.set_argument("--incognito")  # 无痕模式
+    options.set_argument("--disable-extensions")  # 禁用扩展
+    options.set_argument("--disable-dev-shm-usage")  # 禁用/dev/shm使用，可以减少内存使用，但可能会影响性能
+    options.set_argument("--disable-features=AudioServiceOutOfProcess")  # 禁用音频服务的单独进程，有时可以解决与音频相关的崩溃
+    options.set_argument("--disable-renderer-backgrounding")  # 禁用渲染器的后台运行，可以减少后台渲染进程的资源占用
+    options.set_argument("--disable-logging")  # 禁用日志记录，以减少日志记录的资源消耗
+    options.set_argument("--disable-software-rasterizer")  # 禁用软件光栅化器。这个参数在一些显卡兼容性问题时可能有帮助
+    options.set_argument("--disable-css-animations") # 禁用CSS动画
+    options.set_argument("--disable-webrtc")  # 禁用WebRTC
+    options.set_argument("--disable-font-subpixel-positioning")  # 禁用字体子像素渲染
+    options.set_argument("--no-pings")  # 禁用超链接审计
+    options.set_argument("--disable-notifications")   # 禁用通知系统
+
+    options.set_argument("--process-per-site")  # 所有标签页共享同一个渲染进程
+    options.set_argument("--disable-domain-reliability")  # 禁用域可靠性监控
+    options.set_argument("--disable-component-update")  # 禁止组件更新检查
+    options.set_argument("--disable-default-apps")  # 禁用默认应用请求
+    options.set_argument("--disable-background-networking")  # 禁用默认应用请求
+    options.set_argument("--no-sandbox")  # Docker 中必需
+    options.set_argument("--disable-gpu")  # 在某些情况下有帮助
+
     # options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
-        options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
         # options.set_argument("--remote-debugging-port=9222")
-        options.set_argument("--no-sandbox")  # Docker 中必需
-        options.set_argument("--disable-gpu")  # 在某些情况下有帮助
-        options.set_paths(browser_path=browser_path).headless(False)
+        options.no_imgs()
+        # 注：不确定绕过cloudflare是否需要headless设为false
+        options.set_paths(browser_path=browser_path).headless(True)
     else:
+        options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
         options.set_paths(browser_path=browser_path).headless(False)
 
     if proxy:
