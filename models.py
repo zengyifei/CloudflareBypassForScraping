@@ -105,7 +105,11 @@ website_configs = WebsiteConfigs()
 
 
 def init_db(db_url):
-    engine = create_engine(db_url)
+    engine = create_engine(
+        db_url,
+        pool_recycle=1800,  # 30分钟内回收连接，避免MySQL超时断开
+        pool_pre_ping=True   # 在使用连接前先ping测试，自动处理失效连接
+    )
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
     return Session()

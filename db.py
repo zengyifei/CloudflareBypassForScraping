@@ -107,7 +107,11 @@ def init_database_and_cache(config_path=None):
 
         # 创建数据库引擎
         db_url = f"mysql+pymysql://{config['mysql']['user']}:{config['mysql']['password']}@{config['mysql']['host']}:{config['mysql']['port']}/{config['mysql']['database']}"
-        engine = create_engine(db_url)
+        engine = create_engine(
+            db_url,
+            pool_recycle=1800,  # 30分钟内回收连接，避免MySQL超时断开
+            pool_pre_ping=True   # 在使用连接前先ping测试，自动处理失效连接
+        )
 
         # 创建表
         Base.metadata.create_all(engine)
