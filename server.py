@@ -303,7 +303,13 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
     options.set_argument("--disable-default-apps")  # 禁用默认应用请求
     options.set_argument("--disable-background-networking")  # 禁用默认应用请求
     options.set_argument("--no-sandbox")  # Docker 中必需
+    options.set_argument("--disable-web-security")  # 沙箱冲突：使用 --no-sandbox 时必须配合 --disable-web-security
     options.set_argument("--disable-gpu")  # 在某些情况下有帮助
+    options.set_argument("--disable-crash-reporter")  # 禁用奔溃报告
+    options.set_argument("--disable-breakpad")  # 禁用奔溃报告
+
+    options.set_argument("--single-process")  # 单进程模式，# 所有内容运行在单个进程，进程数从 10+ 减少到 3-4 个，内存占用减少 40%-60% (从 800MB → 300-500MB)，标签页崩溃会导致整个浏览器退出
+    options.set_argument("--no-zygote")  # # 禁用预加载机制,减少 2 个 Zygote 相关进程,减少 2 个 Zygote 相关进程
 
     # options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
