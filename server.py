@@ -22,6 +22,7 @@ import atexit
 import asyncio
 import websockets
 import json
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # 添加loguru用于日志记录
 from loguru import logger
@@ -35,6 +36,8 @@ from models import AntiJsConfig, website_configs, init_db
 from internal_api import router as internal_api_router, verify_credentials
 from db import load_config, init_database_and_cache, get_db_session, get_redis_client, redis_prefix
 import hashlib
+# 导入共享模块
+from shared import page_cache, browser_cache, cleanup_page
 
 # 配置日志系统
 LOG_DIR = os.path.join(os.getcwd(), "logs")
@@ -148,6 +151,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 自定义中间件，为指定路径的响应添加X-Request-ID头部
+
+
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # 只处理/api/antijs/路径的请求
+        if request.url.path.startswith("/api/antijs/"):
+            # 从请求对象中获取request_id，如果不存在则生成一个新的
+            request_id = request.state.request_id if hasattr(request.state, "request_id") else str(uuid.uuid4())
+            # 保存到请求对象中
+            request.state.request_id = request_id
+
+            # 处理请求
+            response = await call_next(request)
+
+            # 在响应头中添加X-Request-ID
+            response.headers["X-Request-ID"] = request_id
+            return response
+
+        # 对于其他路径的请求，正常处理
+        return await call_next(request)
+
+
+# 添加请求ID中间件
+app.add_middleware(RequestIDMiddleware)
+
 # 添加静态文件服务
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -155,8 +184,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(internal_api_router)
 
 # Storage for page and browser instances
-page_cache = {}
-browser_cache = {}
+# 不再这里定义page_cache和browser_cache，从shared.py导入
 
 # Pydantic model for the response
 
@@ -347,31 +375,6 @@ async def solve_cloudflare(page: ChromiumPage, retries: int = 5, log: bool = Tru
     except Exception as e:
         sys_logger.error(f"Cloudflare bypass error: {str(e)}")
         return False
-
-
-# 修改关闭页面和清理缓存的辅助函数
-def cleanup_page(page, page_key=None, browser_id=None):
-    """关闭标签页并清理相关缓存"""
-    # 从页面缓存中删除
-    if page_key and page_key in page_cache:
-        del page_cache[page_key]
-
-    # 关闭标签页
-    if page:
-        try:
-            # 尝试关闭标签页
-            try:
-                # 尝试使用 close 方法
-                page.close()
-            except:
-                try:
-                    # 尝试使用 tab_close 方法
-                    page.tab_close()
-                except:
-                    # 如果都失败，尝试使用 JavaScript 关闭
-                    page.run_js('window.close()')
-        except Exception as e:
-            sys_logger.error(f"关闭标签页时出错: {str(e)}")
 
 
 # 修改获取或创建页面的函数，处理浏览器连接断开的情况
@@ -828,8 +831,11 @@ class AntiJsRequest(BaseModel):
 @limiter.limit("10/second", key_func=lambda request: f"api:{request.path_params['api_name']}")
 async def anti_js(api_name: str, data: AntiJsRequest, request: Request):
     """接收数据并根据API名称处理"""
-    # 生成请求ID
-    request_id = str(uuid.uuid4())
+    # 从请求对象中获取request_id，如果不存在则生成一个新的
+    request_id = request.state.request_id if hasattr(request.state, "request_id") else str(uuid.uuid4())
+    # 保存到请求对象中，确保中间件可以访问到
+    request.state.request_id = request_id
+
     # 创建请求上下文的logger
     log = logger.bind(request_id=request_id)
 
@@ -1016,6 +1022,118 @@ window.setInterval = (callback, delay) => {
         )
 
 
+# 添加两个新的API接口到internal_api.py中
+@internal_api_router.get("/api/page_status")
+async def get_page_status(username: str = Depends(verify_credentials)):
+    """获取每个API对应的页面状态"""
+    # 获取所有配置
+    configs = await list_configs(username)
+
+    # 构造结果字典
+    result = {}
+    for config in configs:
+        api_name = config.get('api_name')
+        if api_name:
+            # 检查页面是否在缓存中
+            # 对source_website做MD5处理，与anti_js路由中的处理方式一致
+            page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+            is_page_open = page_key in page_cache
+            result[api_name] = {
+                "is_page_open": is_page_open,
+                "page_key": page_key if is_page_open else None
+            }
+
+    return result
+
+
+@internal_api_router.post("/api/close_page/{api_name}")
+async def close_page(api_name: str, username: str = Depends(verify_credentials)):
+    """关闭指定API名称对应的页面"""
+    # 获取API对应的配置
+    db = get_db_session()
+    if not db:
+        return {"success": False, "message": "数据库连接失败"}
+
+    try:
+        config = db.query(AntiJsConfig).filter(AntiJsConfig.api_name == api_name).first()
+        if not config:
+            return {"success": False, "message": "找不到对应的API配置"}
+
+        # 对source_website做MD5处理，与anti_js路由中的处理方式一致
+        page_key = hashlib.md5(config.source_website.encode()).hexdigest()
+        browser_id = "default"
+
+        # 检查页面是否在缓存中
+        if page_key in page_cache:
+            # 获取页面对象
+            page = page_cache[page_key]
+            # 关闭页面
+            cleanup_page(page, page_key, browser_id)
+            return {"success": True, "message": f"成功关闭 {api_name} 的页面"}
+        else:
+            return {"success": False, "message": "页面未打开或已关闭"}
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        return {"success": False, "message": f"关闭页面时出错: {str(e)}", "error": error_trace}
+
+# 修改现有的configs接口，返回页面状态
+
+
+@internal_api_router.get("/api/configs")
+async def list_configs(username: str = Depends(verify_credentials)):
+    db = get_db_session()
+    if not db:
+        raise HTTPException(status_code=500, detail="数据库连接失败")
+
+    configs = []
+    try:
+        # 查询配置列表
+        db_configs = db.query(AntiJsConfig).order_by(AntiJsConfig.id.desc()).all()
+
+        # 转换为字典列表
+        for config in db_configs:
+            config_dict = {
+                "id": config.id,
+                "api_name": config.api_name,
+                "user_name": config.user_name,
+                "source_website": config.source_website,
+                "hijack_js_url": config.hijack_js_url,
+                "breakpoint_line_num": config.breakpoint_line_num,
+                "breakpoint_col_num": config.breakpoint_col_num,
+                "target_func": config.target_func,
+                "params_len": config.params_len,
+                "params_example": config.params_example,
+                "expire_time": config.expire_time.strftime('%Y-%m-%d %H:%M:%S') if config.expire_time else None,
+                "max_calls": config.max_calls,
+                "is_active": config.is_active,
+                "description": config.description,
+                "override_funcs": config.override_funcs,
+                "trigger_js": config.trigger_js,
+                "cookies": config.cookies
+            }
+
+            # 获取调用次数
+            redis_client = get_redis_client()
+            if redis_client and config.max_calls:
+                redis_key = f"{redis_prefix}call_count:{config.api_name}"
+                call_count = redis_client.get(redis_key)
+                call_count = int(call_count) if call_count else 0
+                config_dict["call_count"] = call_count
+                # 计算使用百分比
+                config_dict["call_percentage"] = min(100, round(call_count / config.max_calls * 100, 2))
+
+            # 添加页面状态信息
+            page_key = hashlib.md5(config.source_website.encode()).hexdigest()
+            config_dict["is_page_open"] = page_key in page_cache
+            config_dict["page_key"] = page_key
+
+            configs.append(config_dict)
+
+        return configs
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"查询配置列表失败: {str(e)}")
+
 # Main entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cloudflare bypass api")
@@ -1032,7 +1150,7 @@ if __name__ == "__main__":
         # 使用最小的屏幕尺寸和最低的色彩深度来减少内存占用
         # 添加额外参数禁用不必要的X扩展和功能
         display = Display(
-            visible=0, 
+            visible=0,
             size=(1, 1),  # 使用最小可能的尺寸
             color_depth=8,  # 使用最低的色彩深度
             extra_args=['-nolisten', 'tcp', '-noreset', '-nocursor']  # 禁用不必要的功能

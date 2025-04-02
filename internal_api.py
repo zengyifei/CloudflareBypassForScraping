@@ -8,6 +8,12 @@ from models import AntiJsConfig, website_configs, generate_random_api_name
 from db import get_db_session, get_redis_client, redis_prefix
 import json
 import yaml
+import hashlib
+# 导入共享模块
+from shared import page_cache, cleanup_page
+
+# 定义API路由器 - 移到顶部避免循环导入问题
+router = APIRouter(prefix="/internal/api", tags=["internal_api"])
 
 # 基本认证
 security = HTTPBasic()
@@ -29,8 +35,6 @@ def verify_credentials(credentials: HTTPBasicCredentials = Depends(security)):
         )
     return credentials.username
 
-
-router = APIRouter(prefix="/internal/api", tags=["internal_api"])
 
 # 必填字段列表 - 移除api_name，将由系统自动生成
 REQUIRED_FIELDS = ['user_name', 'source_website', 'hijack_js_url', 'breakpoint_line_num', 'breakpoint_col_num', 'target_func']
@@ -60,6 +64,7 @@ def validate_expire_time(expire_time_str: str) -> datetime:
 
 @router.get("/configs", response_model=List[dict])
 async def get_configs(username: str = Depends(verify_credentials)):
+    """获取所有配置的接口"""
     try:
         db_session = get_db_session()
         redis_client = get_redis_client()
@@ -97,6 +102,11 @@ async def get_configs(username: str = Depends(verify_credentials)):
                         current_count = int(current_count) if current_count else 0
                         config_dict['call_count'] = current_count
                         config_dict['call_percentage'] = round(current_count / c.max_calls * 100, 2) if c.max_calls > 0 else 0
+
+                    # 添加页面状态信息
+                    page_key = hashlib.md5(c.source_website.encode()).hexdigest()
+                    config_dict['is_page_open'] = page_key in page_cache
+                    config_dict['page_key'] = page_key
 
                     config_list.append(config_dict)
 
@@ -398,54 +408,56 @@ async def delete_config(config_id: int, username: str = Depends(verify_credentia
         raise HTTPException(status_code=500, detail=f"删除配置失败: {str(e)}")
 
 
-@router.post("/refresh", response_model=dict)
-async def refresh_configs(username: str = Depends(verify_credentials)):
-    """手动刷新内存缓存中的配置数据"""
+@router.get("/page_status")
+async def get_page_status(username: str = Depends(verify_credentials)):
+    """获取每个API对应的页面状态"""
+    # 获取所有配置
+    configs = await get_configs(username)
+
+    # 构造结果字典
+    result = {}
+    for config in configs:
+        api_name = config.get('api_name')
+        if api_name:
+            # 检查页面是否在缓存中
+            # 对source_website做MD5处理，与anti_js路由中的处理方式一致
+            page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+            is_page_open = page_key in page_cache
+            result[api_name] = {
+                "is_page_open": is_page_open,
+                "page_key": page_key if is_page_open else None
+            }
+
+    return result
+
+
+@router.post("/close_page/{api_name}")
+async def close_page(api_name: str, username: str = Depends(verify_credentials)):
+    """关闭指定API名称对应的页面"""
+    # 获取API对应的配置
+    db = get_db_session()
+    if not db:
+        return {"success": False, "message": "数据库连接失败"}
+
     try:
-        # 检查数据库连接
-        db_session = get_db_session()
-        if not db_session:
-            raise HTTPException(status_code=500, detail="数据库连接不可用")
+        config = db.query(AntiJsConfig).filter(AntiJsConfig.api_name == api_name).first()
+        if not config:
+            return {"success": False, "message": "找不到对应的API配置"}
 
-        try:
-            # 清空当前缓存
-            website_configs.clear()
+        # 对source_website做MD5处理，与anti_js路由中的处理方式一致
+        page_key = hashlib.md5(config.source_website.encode()).hexdigest()
+        browser_id = "default"
 
-            # 从数据库加载活跃配置
-            configs = db_session.query(AntiJsConfig).filter(AntiJsConfig.is_active == True).all()
-
-            for config in configs:
-                config_dict = {
-                    'id': config.id,
-                    'user_name': config.user_name,
-                    'source_website': config.source_website,
-                    'hijack_js_url': config.hijack_js_url,
-                    'breakpoint_line_num': config.breakpoint_line_num,
-                    'breakpoint_col_num': config.breakpoint_col_num,
-                    'target_func': config.target_func,
-                    'expire_time': config.expire_time.strftime('%Y-%m-%d %H:%M:%S') if config.expire_time else None,
-                    'max_calls': config.max_calls,
-                    'is_active': config.is_active,
-                    'params_len': config.params_len,
-                    'description': config.description,
-                    'api_name': config.api_name,
-                    'params_example': config.params_example,
-                    'override_funcs': config.override_funcs,
-                    'trigger_js': config.trigger_js,
-                    'cookies': config.cookies,
-                }
-                website_configs.set(config.id, config_dict)
-
-            print(f"成功从数据库刷新 {len(configs)} 条配置到内存缓存")
-            return {"message": f"配置刷新成功，共 {len(configs)} 条配置"}
-        except Exception as e:
-            error_trace = traceback.format_exc()
-            print(f"刷新配置失败: {str(e)}\n{error_trace}")
-            raise HTTPException(status_code=500, detail=f"刷新配置失败: {str(e)}")
-
-    except HTTPException:
-        raise
+        # 检查页面是否在缓存中
+        if page_key in page_cache:
+            # 获取页面对象
+            page = page_cache[page_key]
+            # 关闭页面
+            cleanup_page(page, page_key, browser_id)
+            return {"success": True, "message": f"成功关闭 {api_name} 的页面"}
+        else:
+            return {"success": False, "message": "页面未打开或已关闭"}
     except Exception as e:
+        import traceback
         error_trace = traceback.format_exc()
-        print(f"刷新配置失败: {str(e)}\n{error_trace}")
-        raise HTTPException(status_code=500, detail=f"刷新配置失败: {str(e)}")
+        return {"success": False, "message": f"关闭页面时出错: {str(e)}", "error": error_trace}

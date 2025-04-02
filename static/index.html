@@ -256,6 +256,7 @@
                             <th>已调用/剩余</th>
                             <th>覆盖函数</th>
                             <th>状态</th>
+                            <th>页面状态</th>
                             <th>操作</th>
                         </tr>
                     </thead>
@@ -647,6 +648,11 @@
                         <td>${config.override_funcs || 'setTimeout,setInterval'}</td>
                         <td>${config.is_active ? '<span class="badge bg-success">激活</span>' : '<span class="badge bg-secondary">禁用</span>'}</td>
                         <td>
+                            ${config.is_page_open ? 
+                                '<span class="badge bg-warning">已打开</span>' : 
+                                '<span class="badge bg-secondary">已关闭</span>'}
+                        </td>
+                        <td>
                             <button class="btn btn-primary btn-action" onclick='showEditModal(${JSON.stringify(config)})' title="编辑">
                                 <i class="bi bi-pencil"></i>
                             </button>
@@ -656,6 +662,10 @@
                             <button class="btn btn-success btn-action" onclick='showTestModal(${JSON.stringify(config)})' title="测试">
                                 <i class="bi bi-play"></i>
                             </button>
+                            ${config.is_page_open ? 
+                                `<button class="btn btn-warning btn-action" onclick="closePage('${config.api_name}')" title="关闭页面">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>` : ''}
                         </td>
                     `;
                     tbody.appendChild(tr);
@@ -793,6 +803,42 @@
                 hideLoading();
             }
         }
+
+        async function closePage(apiName) {
+            if (!confirm(`确定要关闭 ${apiName} 的页面吗？`)) {
+                return;
+            }
+
+            try {
+                showLoading();
+                const response = await fetch(`/internal/api/close_page/${apiName}`, {
+                    method: 'POST',
+                    credentials: 'include'
+                });
+
+                if (response.status === 401) {
+                    window.location.href = '/admin';
+                    return;
+                }
+
+                const result = await response.json();
+                
+                if (!result.success) {
+                    throw new Error(result.message || '关闭页面失败');
+                }
+
+                // 更新配置列表以反映页面状态变化
+                loadConfigs();
+            } catch (error) {
+                console.error('关闭页面失败:', error);
+                alert('关闭页面失败: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        // 每30秒自动刷新页面状态（可选）
+        // setInterval(loadConfigs, 30000);
     </script>
 </body>
 </html> 
