@@ -1029,7 +1029,17 @@ if __name__ == "__main__":
 
     if args.headless or DOCKER_MODE:
         # display = Display(visible=0, size=(1920, 1080))
-        display = Display(visible=0, size=(100, 100))
+        # 使用最小的屏幕尺寸和最低的色彩深度来减少内存占用
+        # 添加额外参数禁用不必要的X扩展和功能
+        display = Display(
+            visible=0, 
+            size=(1, 1),  # 使用最小可能的尺寸
+            color_depth=8,  # 使用最低的色彩深度
+            extra_args=['-nolisten', 'tcp', '-noreset', '-nocursor']  # 禁用不必要的功能
+        )
+        # 设置环境变量以进一步减少内存使用
+        os.environ['XVFB_SCREEN_DEPTH'] = '8'
+        os.environ['XVFB_SCREEN'] = '1x1x8'
         display.start()
 
         def cleanup_display():
