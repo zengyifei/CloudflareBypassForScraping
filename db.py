@@ -118,13 +118,13 @@ def init_database_and_cache(config_path=None):
 
         # 从数据库直接加载数据到内存缓存
         try:
-            from models import JsReverseConfig, website_configs
+            from models import AntiJsConfig, website_configs
 
             # 清空当前缓存
             website_configs.clear()
 
             # 从数据库加载活跃配置
-            configs = db_session.query(JsReverseConfig).filter(JsReverseConfig.is_active == True).all()
+            configs = db_session.query(AntiJsConfig).filter(AntiJsConfig.is_active == True).all()
 
             for config in configs:
                 config_dict = {

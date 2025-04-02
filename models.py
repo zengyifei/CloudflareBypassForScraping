@@ -16,8 +16,8 @@ def generate_random_api_name(length=10):
     return ''.join(random.choice(characters) for _ in range(length))
 
 
-class JsReverseConfig(Base):
-    __tablename__ = 'js_reverse_configs'
+class AntiJsConfig(Base):
+    __tablename__ = 'antijs_configs'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     create_time = Column(DateTime, default=datetime.utcnow)
@@ -40,7 +40,7 @@ class JsReverseConfig(Base):
     cookies = Column(Text, nullable=True)
 
     def __repr__(self):
-        return f"<JsReverseConfig(id='{self.id}', user_name='{self.user_name}', api_name='{self.api_name}')>"
+        return f"<AntiJsConfig(id='{self.id}', user_name='{self.user_name}', api_name='{self.api_name}')>"
 
 # 内存缓存
 

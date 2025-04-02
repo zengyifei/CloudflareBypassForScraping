@@ -4,7 +4,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import traceback
 import secrets
-from models import JsReverseConfig, website_configs, generate_random_api_name
+from models import AntiJsConfig, website_configs, generate_random_api_name
 from db import get_db_session, get_redis_client, redis_prefix
 import json
 import yaml
@@ -66,7 +66,7 @@ async def get_configs(username: str = Depends(verify_credentials)):
 
         if db_session:
             try:
-                configs = db_session.query(JsReverseConfig).all()
+                configs = db_session.query(AntiJsConfig).all()
                 config_list = []
 
                 for c in configs:
@@ -159,12 +159,12 @@ async def create_config(config: Dict[str, Any], username: str = Depends(verify_c
         while True:
             api_name = generate_random_api_name()
             # 检查生成的api_name是否已存在
-            existing = db_session.query(JsReverseConfig).filter(JsReverseConfig.api_name == api_name).first()
+            existing = db_session.query(AntiJsConfig).filter(AntiJsConfig.api_name == api_name).first()
             if not existing:
                 break
 
         # 创建新配置
-        new_config = JsReverseConfig(
+        new_config = AntiJsConfig(
             user_name=config['user_name'].strip(),
             source_website=config['source_website'].strip(),
             hijack_js_url=config['hijack_js_url'].strip(),
@@ -236,7 +236,7 @@ async def update_config(config_id: int, config: Dict[str, Any], username: str = 
             raise HTTPException(status_code=500, detail="数据库连接不可用")
 
         # 查询要更新的配置
-        existing_config = db_session.query(JsReverseConfig).filter(JsReverseConfig.id == config_id).first()
+        existing_config = db_session.query(AntiJsConfig).filter(AntiJsConfig.id == config_id).first()
         if not existing_config:
             raise HTTPException(status_code=404, detail="配置不存在")
 
@@ -371,7 +371,7 @@ async def delete_config(config_id: int, username: str = Depends(verify_credentia
             raise HTTPException(status_code=500, detail="数据库连接不可用")
 
         # 查询要删除的配置
-        config = db_session.query(JsReverseConfig).filter(JsReverseConfig.id == config_id).first()
+        config = db_session.query(AntiJsConfig).filter(AntiJsConfig.id == config_id).first()
         if not config:
             raise HTTPException(status_code=404, detail="配置不存在")
 
@@ -412,7 +412,7 @@ async def refresh_configs(username: str = Depends(verify_credentials)):
             website_configs.clear()
 
             # 从数据库加载活跃配置
-            configs = db_session.query(JsReverseConfig).filter(JsReverseConfig.is_active == True).all()
+            configs = db_session.query(AntiJsConfig).filter(AntiJsConfig.is_active == True).all()
 
             for config in configs:
                 config_dict = {

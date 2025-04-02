@@ -31,7 +31,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from models import JsReverseConfig, website_configs, init_db
+from models import AntiJsConfig, website_configs, init_db
 from internal_api import router as internal_api_router, verify_credentials
 from db import load_config, init_database_and_cache, get_db_session, get_redis_client, redis_prefix
 import hashlib
@@ -291,7 +291,7 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
     options.set_argument("--disable-renderer-backgrounding")  # 禁用渲染器的后台运行，可以减少后台渲染进程的资源占用
     options.set_argument("--disable-logging")  # 禁用日志记录，以减少日志记录的资源消耗
     options.set_argument("--disable-software-rasterizer")  # 禁用软件光栅化器。这个参数在一些显卡兼容性问题时可能有帮助
-    options.set_argument("--disable-css-animations") # 禁用CSS动画
+    options.set_argument("--disable-css-animations")  # 禁用CSS动画
     options.set_argument("--disable-webrtc")  # 禁用WebRTC
     options.set_argument("--disable-font-subpixel-positioning")  # 禁用字体子像素渲染
     options.set_argument("--no-pings")  # 禁用超链接审计
@@ -307,6 +307,13 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
     options.set_argument("--disable-gpu")  # 在某些情况下有帮助
     options.set_argument("--disable-crash-reporter")  # 禁用奔溃报告
     options.set_argument("--disable-breakpad")  # 禁用奔溃报告
+    options.set_argument("--disable-client-side-phishing-detection")  # 关闭钓鱼检测（减少请求）
+
+    # 音视频相关设置
+    options.set_argument("--autoplay-policy=no-user-gesture-required")  # 强制禁止自动播放（覆盖网站设置）
+    options.set_argument("--disable-accelerated-video-decode")  # 禁用视频硬件解码
+    options.set_argument("--disable-accelerated-video-encode")  # 禁用视频硬件编码
+    options.set_argument("--mute-audio")  # 静音所有标签页
 
     # options.set_argument("--single-process")  # 不能开，开了服务器用不了。单进程模式，# 所有内容运行在单个进程，进程数从 10+ 减少到 3-4 个，内存占用减少 40%-60% (从 800MB → 300-500MB)，标签页崩溃会导致整个浏览器退出
     options.set_argument("--no-zygote")  # 禁用预加载机制,减少 2 个 Zygote 相关进程,减少 2 个 Zygote 相关进程
@@ -423,6 +430,31 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
 
             # 创建新标签页
             page = browser.new_tab()
+            page.set.blocked_urls([
+                "*.png",
+                "*.jpg",
+                "*.jpeg",
+                "*.gif",
+                "*.svg",
+                "*.ico",
+                "*.webp",
+                "*.txt",
+                "*.pdf",
+                "*.doc",
+                "*.mp4",
+                "*.webm",
+                "*.avi",
+                "*.m3u8",
+                "*.mp3",
+                "*.wav",
+                "*.ogg",
+                "*.flac",
+                "*.aac",
+                "*.m4a",
+                "*.m4b",
+                "*.m4p",
+                "*.m4v",
+            ])
             if cookies:
                 page.set.cookies(cookies)
             if init_js:

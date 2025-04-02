@@ -5,4 +5,28 @@
 重启服务: `sudo systemctl restart yf_chrome`
 查看服务状态: `sudo systemctl status yf_chrome`
 
+配置文件路径: `/etc/systemd/system/yf_chrome.service`
+配置文件内容:
+```
+[Unit]
+Description=Uvicorn Service with Auto-Restart
+After=network.target
 
+[Service]
+ExecStart=/usr/bin/env python3 server.py
+# 每24h自动重启
+# 强制运行24小时后退出
+RuntimeMaxSec=86400
+Restart=always
+RestartSec=5 
+TimeoutStopSec=10
+KillMode=mixed
+User=ubuntu
+WorkingDirectory=/home/ubuntu/CloudflareBypassForScraping
+
+# 内存超限自动重启
+MemoryMax=1500M    
+
+[Install]
+WantedBy=multi-user.target
+```

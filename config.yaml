@@ -3,7 +3,7 @@ mysql:
     port: 3306
     user: root
     password: Cd32d5e86e
-    database: test
+    database: shaomai
 
 redis:
     host: localhost
