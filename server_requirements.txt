@@ -6,5 +6,6 @@ DrissionPage==4.0.5.6
 websockets
 loguru
 slowapi
+pymysql
 sqlalchemy
 redis
