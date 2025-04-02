@@ -1134,6 +1134,42 @@ async def list_configs(username: str = Depends(verify_credentials)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"查询配置列表失败: {str(e)}")
 
+
+def inject_debank_config():
+    """预注入debank配置到website_configs中"""
+    debank_config = {
+        'id': 99999,  # 使用一个特别的ID以避免冲突
+        'api_name': 'debank',
+        'user_name': 'system',
+        'source_website': 'https://debank.com/profile/0x3fe861679bd8ec58dd45460ffd38ee39107aaff8/history',
+        'hijack_js_url': 'https://assets.debank.com/static/js/6129.fbaacfcf.chunk.js',
+        'breakpoint_line_num': 1,
+        'breakpoint_col_num': 45827,
+        'target_func': 'x',
+        'params_len': 4,  # 请求方法、路由、数据
+        'params_example': """[
+  {
+            "user_addr":"0x3fe861679bd8ec58dd45460ffd38ee39107aaff8",
+            "chain": "",
+            "start_time": 0,
+            "page_count": 20
+        },
+  "GET",
+  "/history/list",
+  {"version": "v2"}
+]""",
+        'expire_time': None,  # 永不过期
+        'max_calls': None,  # 无调用次数限制
+        'is_active': True,
+        'description': '自动注入的debank签名API',
+        'override_funcs': 'setTimeout,setInterval',
+        'trigger_js': None,
+        'cookies': None,
+    }
+    website_configs.set(debank_config["api_name"], debank_config)
+
+
+
 # Main entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cloudflare bypass api")
@@ -1179,4 +1215,10 @@ if __name__ == "__main__":
         config = load_config(args.config)
         server_port = config['server']['port'] if config and 'server' in config else 8889
 
+    # 预注入debank配置到website_configs中
+    inject_debank_config()
+
     uvicorn.run(app, host="0.0.0.0", port=server_port)
+
+# 注入debank配置的函数
+
