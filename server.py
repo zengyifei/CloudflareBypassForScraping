@@ -308,8 +308,8 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
     options.set_argument("--disable-crash-reporter")  # 禁用奔溃报告
     options.set_argument("--disable-breakpad")  # 禁用奔溃报告
 
-    options.set_argument("--single-process")  # 单进程模式，# 所有内容运行在单个进程，进程数从 10+ 减少到 3-4 个，内存占用减少 40%-60% (从 800MB → 300-500MB)，标签页崩溃会导致整个浏览器退出
-    # options.set_argument("--no-zygote")  # # 禁用预加载机制,减少 2 个 Zygote 相关进程,减少 2 个 Zygote 相关进程
+    # options.set_argument("--single-process")  # 不能开，开了服务器用不了。单进程模式，# 所有内容运行在单个进程，进程数从 10+ 减少到 3-4 个，内存占用减少 40%-60% (从 800MB → 300-500MB)，标签页崩溃会导致整个浏览器退出
+    options.set_argument("--no-zygote")  # 禁用预加载机制,减少 2 个 Zygote 相关进程,减少 2 个 Zygote 相关进程
 
     # options.set_argument("--remote-allow-origins=*")
     if DOCKER_MODE:
