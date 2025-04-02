@@ -387,9 +387,18 @@
                         <label class="form-label">响应结果</label>
                         <pre id="testResult" class="form-control" style="min-height: 200px; white-space: pre-wrap;"></pre>
                     </div>
+                    <div id="curlCommandContainer" class="mb-3" style="display: none;">
+                        <pre id="curlCommand" class="form-control" style="min-height: 100px; white-space: pre-wrap;"></pre>
+                    </div>
+                    <div id="copySuccess" class="alert alert-success mt-2" style="display: none;">
+                        curl命令已复制到剪贴板！
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-info" id="copyCurlBtn" onclick="copyCurlCommand()">
+                        <i class="bi bi-clipboard"></i> 复制curl命令
+                    </button>
                     <button type="button" class="btn btn-primary" onclick="runApiTest()">发送请求</button>
                 </div>
             </div>
@@ -542,6 +551,11 @@
             try {
                 const paramsField = document.getElementById('testParams');
                 const resultField = document.getElementById('testResult');
+                const curlCommandContainer = document.getElementById('curlCommandContainer');
+                const curlCommandField = document.getElementById('curlCommand');
+                
+                // 隐藏可能显示的复制成功信息
+                document.getElementById('copySuccess').style.display = 'none';
                 
                 // 解析参数
                 let params;
@@ -553,18 +567,23 @@
                 } catch (e) {
                     resultField.textContent = `参数解析错误: ${e.message}`;
                     resultField.className = 'form-control text-danger';
+                    curlCommandContainer.style.display = 'none';
                     return;
                 }
                 
                 showLoading();
                 resultField.textContent = '请求中...';
                 
-                const response = await fetch(`/api/antijs/${currentTestApiName}`, {
+                // 保存请求信息以供生成curl命令
+                const apiUrl = `/api/antijs/${currentTestApiName}`;
+                const requestBody = JSON.stringify({ data: params });
+                
+                const response = await fetch(apiUrl, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    body: JSON.stringify({ data: params })
+                    body: requestBody
                 });
                 
                 const result = await response.json();
@@ -576,12 +595,78 @@
                 } else {
                     resultField.className = 'form-control text-danger';
                 }
+                
+                // 生成curl命令
+                const curlCmd = generateCurlCommand(apiUrl, requestBody);
+                curlCommandField.textContent = curlCmd;
+                curlCommandContainer.style.display = 'block';
+                
             } catch (error) {
                 console.error('API测试失败:', error);
                 document.getElementById('testResult').textContent = `请求失败: ${error.message}`;
                 document.getElementById('testResult').className = 'form-control text-danger';
+                document.getElementById('curlCommandContainer').style.display = 'none';
             } finally {
                 hideLoading();
+            }
+        }
+
+        // 生成curl命令
+        function generateCurlCommand(url, body) {
+            // 获取完整的URL（包含域名）
+            const fullUrl = new URL(url, window.location.origin).href;
+            
+            // 构建curl命令
+            let curlCmd = `curl -X POST "${fullUrl}" \\
+  -H "Content-Type: application/json" \\
+  -d '${body}'`;
+            
+            return curlCmd;
+        }
+
+        // 复制curl命令到剪贴板
+        function copyCurlCommand() {
+            try {
+                // 隐藏可能显示的复制成功信息
+                document.getElementById('copySuccess').style.display = 'none';
+                
+                // 解析参数
+                const paramsField = document.getElementById('testParams');
+                let params;
+                
+                try {
+                    params = JSON.parse(paramsField.value);
+                    if (!Array.isArray(params)) {
+                        throw new Error('参数必须是数组格式');
+                    }
+                } catch (e) {
+                    alert(`参数解析错误: ${e.message}`);
+                    return;
+                }
+                
+                // 生成curl命令
+                const apiUrl = `/api/antijs/${currentTestApiName}`;
+                const requestBody = JSON.stringify({ data: params });
+                const curlCmd = generateCurlCommand(apiUrl, requestBody);
+                
+                // 复制到剪贴板
+                navigator.clipboard.writeText(curlCmd)
+                    .then(() => {
+                        // 显示复制成功信息
+                        document.getElementById('copySuccess').style.display = 'block';
+                        
+                        // 2秒后隐藏成功信息
+                        setTimeout(() => {
+                            document.getElementById('copySuccess').style.display = 'none';
+                        }, 2000);
+                    })
+                    .catch(err => {
+                        console.error('复制失败:', err);
+                        alert('复制失败，请手动复制。');
+                    });
+            } catch (error) {
+                console.error('生成curl命令失败:', error);
+                alert('生成curl命令失败: ' + error.message);
             }
         }
 
