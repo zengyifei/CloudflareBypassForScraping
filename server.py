@@ -461,7 +461,7 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
             if cookies:
                 page.set.cookies(cookies)
             if init_js:
-                sys_logger.info('script_id', page.add_init_js(init_js))
+                page.add_init_js(init_js)
             # 导航到 URL
             page.get(url)
 
