@@ -1139,7 +1139,7 @@ def inject_debank_config():
     """预注入debank配置到website_configs中"""
     debank_config = {
         'id': 99999,  # 使用一个特别的ID以避免冲突
-        'api_name': 'debank',
+        'api_name': 'debank_sign',
         'user_name': 'system',
         'source_website': 'https://debank.com/profile/0x3fe861679bd8ec58dd45460ffd38ee39107aaff8/history',
         'hijack_js_url': 'https://assets.debank.com/static/js/6129.fbaacfcf.chunk.js',
@@ -1167,6 +1167,7 @@ def inject_debank_config():
         'cookies': None,
     }
     website_configs.set(debank_config["api_name"], debank_config)
+    print(f"debank_sign配置已注入到website_configs中")
 
 
 
