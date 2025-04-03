@@ -720,99 +720,6 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
     return True
 
 
-# 修改 Debank API 请求模型
-
-
-class DebankRequest(BaseModel):
-    method: str = Field(...)  # HTTP 方法，如 GET、POST 等
-    route: str = Field(...)   # API 路由，如 "/v1/user/profile"
-    data: Optional[Dict[str, Any]] = Field(None)  # 请求数据对象
-
-# 修改 Debank API 端点
-
-
-@app.post("/debank_sign")
-async def debank_sign(req: DebankRequest):
-    # 设置页面缓存键
-    page_key = f"debank_daemon"
-    browser_id = "default"
-    page = None  # 初始化 page 变量为 None
-
-    try:
-        # 获取或创建页面
-        page, is_new, success, error_msg = await get_or_create_page(
-            page_key=page_key,
-            browser_id=browser_id,
-            url="https://debank.com/profile/0x3fe861679bd8ec58dd45460ffd38ee39107aaff8/history" if not page_key in page_cache else None
-        )
-
-        if not success:
-            return {"ok": False, "msg": error_msg}
-
-        if not page:
-            return {"ok": False, "msg": "Failed to create page"}
-
-        target_func_name = "x"
-        export_func_name = "debank_sign"
-        # 检查 window.debank_sign 函数是否存在
-        check_script = """typeof window.""" + export_func_name + """ === 'function'"""
-        has_debank_sign = page.run_js(check_script, as_expr=True)
-        if not has_debank_sign:
-            await setup_breakpoint_and_expose_function(page, "https://assets.debank.com/static/js/6129.fbaacfcf.chunk.js", line_number=1, column_number=45827, target_func_name=target_func_name, export_func_name=export_func_name)
-            has_debank_sign = page.run_js(check_script, as_expr=True)
-            # sys_logger.info(has_debank_sign, 'script', check_script)
-        if not has_debank_sign:
-            raise Exception("window.debank_sign 函数不存在，暂不支持此操作")
-
-        sign_script = """
-                try {
-                    // 确保参数格式正确
-                    const data = %s;
-                    const method = "%s";
-                    const route = "%s";
-                    const options = {"version": "v2"};
-                    // 调用函数
-                    const result = window.debank_sign(data, method, route, options);
-                    return result;
-                    // return {...result, "user_agent": navigator.userAgent};
-                } catch (e) {
-                    console.error("调用 debank_sign 出错:", e);
-                    return {"error": e.toString()};
-                }
-        """ % (json.dumps(req.data) if req.data else "{}", req.method, req.route)
-        # print('sign_script', sign_script)
-
-        sign_result = page.run_js(sign_script)
-        # print('sign_result', sign_result)
-
-        # 检查结果是否包含错误
-        if isinstance(sign_result, dict) and 'error' in sign_result:
-            # 清理资源
-            if not page_key:
-                cleanup_page(page, page_key, browser_id)
-            return {"ok": False, "msg": f"调用 window.debank_sign 失败: {sign_result['error']}"}
-
-        # 返回 API 调用结果和签名信息
-        return {
-            # "user_agent": sign_result.get('user_agent', ''),
-            "nonce": sign_result.get('nonce', ''),
-            "ts": sign_result.get('ts', 0),
-            "signature": sign_result.get('signature', ''),
-            "version": sign_result.get('version', '')
-        }
-
-    except Exception as e:
-        import traceback
-        error_trace = traceback.format_exc()
-        sys_logger.error(f"Debank API 错误: {error_trace}")
-
-        # 清理资源（只有当 page 不为 None 时才清理）
-        if page:
-            cleanup_page(page, page_key, browser_id)
-
-        return {"ok": False, "msg": str(e), "trace": error_trace}
-
-
 # API路由
 @app.get("/admin")
 async def get_admin_page(username: str = Depends(verify_credentials)):
@@ -920,6 +827,7 @@ Function.prototype.constructor=function(){
     return Function.prototype.temp_constructor.apply(this, arguments);
 };
         """
+        init_js += "window.__antijs=true;"
         if not config.get('override_funcs'):
             config['override_funcs'] = 'all'
         for method in config['override_funcs'].split(','):
@@ -1170,7 +1078,6 @@ def inject_debank_config():
     print(f"debank_sign配置已注入到website_configs中")
 
 
-
 # Main entry point
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Cloudflare bypass api")
@@ -1222,4 +1129,3 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=server_port)
 
 # 注入debank配置的函数
-

@@ -47,57 +47,40 @@ class AntiJsConfig(Base):
 
 class WebsiteConfigs:
     def __init__(self):
-        self.configs = {}
-        self.api_name_map = {}  # 用于存储api_name到id的映射
+        self.configs = {}  # 直接使用api_name作为键
 
-    def set(self, config_id: int, config: dict):
+    def set(self, api_name: str, config: dict):
         # 确保 expire_time 是字符串或 None
         if isinstance(config.get('expire_time'), datetime):
             config['expire_time'] = config['expire_time'].strftime('%Y-%m-%d %H:%M:%S')
 
-        # 保存配置，同时更新api_name到id的映射
-        self.configs[config_id] = config
-        if 'api_name' in config and config['api_name']:
-            self.api_name_map[config['api_name']] = config_id
-
-    def get(self, config_id: int) -> Optional[dict]:
-        return self.configs.get(config_id)
+        # 直接以api_name为键保存配置
+        self.configs[api_name] = config
 
     def get_by_api_name(self, api_name: str) -> Optional[dict]:
         """通过api_name获取配置"""
-        config_id = self.api_name_map.get(api_name)
-        if config_id is not None:
-            return self.configs.get(config_id)
-        return None
+        return self.configs.get(api_name)
 
     def get_all(self) -> dict:
         return self.configs
 
-    def delete(self, config_id: int):
-        # 删除配置时，同时删除api_name映射
-        config = self.configs.get(config_id)
-        if config and 'api_name' in config:
-            self.api_name_map.pop(config['api_name'], None)
-        self.configs.pop(config_id, None)
+    def delete(self, api_name: str):
+        """删除指定api_name的配置"""
+        if api_name in self.configs:
+            self.configs.pop(api_name)
 
     def sanitize_configs(self):
         """确保所有配置的expire_time字段格式一致"""
-        self.api_name_map = {}  # 重置api_name映射
-        for config_id, config in self.configs.items():
+        for config in self.configs.values():
             if 'expire_time' in config:
                 if isinstance(config['expire_time'], datetime):
                     config['expire_time'] = config['expire_time'].strftime('%Y-%m-%d %H:%M:%S')
                 elif config['expire_time'] is not None and not isinstance(config['expire_time'], str):
                     config['expire_time'] = None
 
-            # 更新api_name映射
-            if 'api_name' in config and config['api_name']:
-                self.api_name_map[config['api_name']] = config_id
-
     def clear(self):
         """清空所有配置"""
         self.configs = {}
-        self.api_name_map = {}
 
 
 # 全局配置缓存

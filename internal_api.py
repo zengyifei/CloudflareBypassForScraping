@@ -11,6 +11,7 @@ import yaml
 import hashlib
 # 导入共享模块
 from shared import page_cache, cleanup_page
+from pydantic import BaseModel
 
 # 定义API路由器 - 移到顶部避免循环导入问题
 router = APIRouter(prefix="/internal/api", tags=["internal_api"])
@@ -219,7 +220,7 @@ async def create_config(config: Dict[str, Any], username: str = Depends(verify_c
                     'trigger_js': new_config.trigger_js,
                     'cookies': new_config.cookies,
                 }
-                website_configs.set(new_config.id, cache_data)
+                website_configs.set(new_config.api_name, cache_data)
 
             # 返回创建的配置ID和api_name
             return {"id": new_config.id, "api_name": new_config.api_name, "message": "配置创建成功"}
@@ -350,10 +351,10 @@ async def update_config(config_id: int, config: Dict[str, Any], username: str = 
                     'trigger_js': existing_config.trigger_js,
                     'cookies': existing_config.cookies,
                 }
-                website_configs.set(existing_config.id, cache_data)
+                website_configs.set(existing_config.api_name, cache_data)
             elif was_active:
                 # 如果配置之前是活跃的，现在变为非活跃，从缓存中删除
-                website_configs.delete(existing_config.id)
+                website_configs.delete(existing_config.api_name)
 
             return {"id": config_id, "api_name": existing_config.api_name, "message": "配置更新成功"}
         except Exception as e:
@@ -391,7 +392,8 @@ async def delete_config(config_id: int, username: str = Depends(verify_credentia
             db_session.commit()
 
             # 从内存缓存中删除
-            website_configs.delete(config_id)
+            if config.api_name:
+                website_configs.delete(config.api_name)
 
             return {"id": config_id, "message": "配置删除成功"}
         except Exception as e:
@@ -411,22 +413,20 @@ async def delete_config(config_id: int, username: str = Depends(verify_credentia
 @router.get("/page_status")
 async def get_page_status(username: str = Depends(verify_credentials)):
     """获取每个API对应的页面状态"""
-    # 获取所有配置
-    configs = await get_configs(username)
+    # 直接从内存缓存获取所有配置
+    configs = website_configs.get_all()
 
     # 构造结果字典
     result = {}
-    for config in configs:
-        api_name = config.get('api_name')
-        if api_name:
-            # 检查页面是否在缓存中
-            # 对source_website做MD5处理，与anti_js路由中的处理方式一致
-            page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
-            is_page_open = page_key in page_cache
-            result[api_name] = {
-                "is_page_open": is_page_open,
-                "page_key": page_key if is_page_open else None
-            }
+    for api_name, config in configs.items():
+        # 检查页面是否在缓存中
+        # 对source_website做MD5处理，与anti_js路由中的处理方式一致
+        page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+        is_page_open = page_key in page_cache
+        result[api_name] = {
+            "is_page_open": is_page_open,
+            "page_key": page_key if is_page_open else None
+        }
 
     return result
 
@@ -461,3 +461,48 @@ async def close_page(api_name: str, username: str = Depends(verify_credentials))
         import traceback
         error_trace = traceback.format_exc()
         return {"success": False, "message": f"关闭页面时出错: {str(e)}", "error": error_trace}
+
+
+# 定义执行JS的请求模型
+class ExecuteJsRequest(BaseModel):
+    javascript: str
+    is_async: bool = False
+
+
+@router.post("/execute_js/{api_name}")
+async def execute_js(api_name: str, request: ExecuteJsRequest, username: str = Depends(verify_credentials)):
+    """根据API名称在页面中执行JavaScript代码"""
+    try:
+        # 直接从website_configs中获取配置
+        config = website_configs.get_by_api_name(api_name)
+
+        if not config:
+            return {"success": False, "message": "找不到对应的API配置"}
+
+        # 对source_website做MD5处理
+        page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+
+        # 检查页面是否在缓存中
+        if page_key not in page_cache:
+            return {"success": False, "message": "页面未打开，请先调用API"}
+
+        # 获取页面对象
+        page = page_cache[page_key]
+
+        # 执行JavaScript代码
+        try:
+            if request.is_async:
+                # 执行异步JavaScript
+                result = page.run_js(f"(async () => {{ {request.javascript} }})()", as_expr=True)
+            else:
+                # 执行同步JavaScript
+                result = page.run_js(request.javascript, as_expr=True)
+            return {"success": True, "result": result}
+        except Exception as e:
+            import traceback
+            error_trace = traceback.format_exc()
+            return {"success": False, "message": f"执行JavaScript时出错: {str(e)}", "error": error_trace}
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        return {"success": False, "message": f"处理请求时出错: {str(e)}", "error": error_trace}

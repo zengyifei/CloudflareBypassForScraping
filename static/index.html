@@ -405,6 +405,42 @@
         </div>
     </div>
 
+    <!-- 执行JS模态框 -->
+    <div class="modal fade" id="executeJsModal" tabindex="-1">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">执行JavaScript</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label">API名称</label>
+                        <input type="text" class="form-control" id="executeJsApiName" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">JavaScript代码</label>
+                        <textarea class="form-control" id="jsCode" rows="10" placeholder="输入要执行的JavaScript代码"></textarea>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input class="form-check-input" type="checkbox" id="isAsync">
+                        <label class="form-check-label" for="isAsync">
+                            异步执行（适用于包含await的代码）
+                        </label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">执行结果</label>
+                        <pre id="jsResult" class="form-control" style="min-height: 200px; white-space: pre-wrap;"></pre>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                    <button type="button" class="btn btn-primary" onclick="executeJs()">执行</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- 加载动画 -->
     <div class="loading" style="display: none;">
         <div class="loading-spinner"></div>
@@ -415,12 +451,14 @@
         let configModal;
         let currentMode = 'add';
         let testModal;
+        let executeJsModal;
         let currentTestApiName;
         const loading = document.querySelector('.loading');
 
         document.addEventListener('DOMContentLoaded', function() {
             configModal = new bootstrap.Modal(document.getElementById('configModal'));
             testModal = new bootstrap.Modal(document.getElementById('testModal'));
+            executeJsModal = new bootstrap.Modal(document.getElementById('executeJsModal'));
             loadConfigs();
         });
 
@@ -734,8 +772,8 @@
                         <td>${config.is_active ? '<span class="badge bg-success">激活</span>' : '<span class="badge bg-secondary">禁用</span>'}</td>
                         <td>
                             ${config.is_page_open ? 
-                                '<span class="badge bg-warning">已打开</span>' : 
-                                '<span class="badge bg-secondary">已关闭</span>'}
+                                `<span class="badge bg-success" style="cursor: pointer;" onclick="showExecuteJsModal('${config.api_name}')">已打开</span>` 
+                                : '<span class="badge bg-secondary">未打开</span>'}
                         </td>
                         <td>
                             <button class="btn btn-primary btn-action" onclick='showEditModal(${JSON.stringify(config)})' title="编辑">
@@ -917,6 +955,62 @@
             } catch (error) {
                 console.error('关闭页面失败:', error);
                 alert('关闭页面失败: ' + error.message);
+            } finally {
+                hideLoading();
+            }
+        }
+
+        function showExecuteJsModal(apiName) {
+            document.getElementById('executeJsApiName').value = apiName;
+            document.getElementById('jsCode').value = '';
+            document.getElementById('jsResult').textContent = '';
+            document.getElementById('isAsync').checked = false;
+            executeJsModal.show();
+        }
+
+        async function executeJs() {
+            try {
+                showLoading();
+                const apiName = document.getElementById('executeJsApiName').value;
+                const jsCode = document.getElementById('jsCode').value;
+                const isAsync = document.getElementById('isAsync').checked;
+
+                if (!jsCode.trim()) {
+                    alert('请输入要执行的JavaScript代码');
+                    hideLoading();
+                    return;
+                }
+
+                const response = await fetch(`/internal/api/execute_js/${apiName}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        javascript: jsCode,
+                        is_async: isAsync
+                    }),
+                    credentials: 'include'
+                });
+
+                if (response.status === 401) {
+                    window.location.href = '/admin';
+                    return;
+                }
+
+                const result = await response.json();
+                
+                if (!result.success) {
+                    throw new Error(result.message || '执行JavaScript失败');
+                }
+
+                // 显示执行结果
+                document.getElementById('jsResult').textContent = typeof result.result === 'object' 
+                    ? JSON.stringify(result.result, null, 2) 
+                    : result.result;
+            } catch (error) {
+                console.error('执行JavaScript失败:', error);
+                document.getElementById('jsResult').textContent = `错误: ${error.message}`;
             } finally {
                 hideLoading();
             }

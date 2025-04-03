@@ -131,6 +131,10 @@ def init_database_and_cache(config_path=None):
             configs = db_session.query(AntiJsConfig).filter(AntiJsConfig.is_active == True).all()
 
             for config in configs:
+                if not config.api_name:
+                    print(f"警告: 配置 ID {config.id} 没有api_name，跳过缓存")
+                    continue
+
                 config_dict = {
                     'id': config.id,
                     'user_name': config.user_name,
@@ -148,7 +152,8 @@ def init_database_and_cache(config_path=None):
                     'trigger_js': config.trigger_js,
                     'cookies': config.cookies,
                 }
-                website_configs.set(config.id, config_dict)
+                # 直接使用api_name作为键保存配置
+                website_configs.set(config.api_name, config_dict)
 
             # 确保所有缓存的配置格式一致
             website_configs.sanitize_configs()
