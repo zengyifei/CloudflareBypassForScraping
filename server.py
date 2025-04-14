@@ -1136,7 +1136,7 @@ def inject_debank_config():
         'source_website': 'https://debank.com/profile/0x3fe861679bd8ec58dd45460ffd38ee39107aaff8/history',
         'hijack_js_url': 'https://assets.debank.com/static/js/6129.fbaacfcf.chunk.js',
         'breakpoint_line_num': 1,
-        'breakpoint_col_num': 45827,
+        'breakpoint_col_num': 45819,
         'target_func': 'x',
         'params_len': 4,  # 请求方法、路由、数据
         'params_example': """[
@@ -1153,7 +1153,7 @@ def inject_debank_config():
         'expire_time': None,  # 永不过期
         'max_calls': None,  # 无调用次数限制
         'is_active': True,
-        'description': '自动注入的debank签名API',
+        'description': '自动注入的debank签名API, 搜索"gsD"',
         'override_funcs': 'setTimeout,setInterval',
         'trigger_js': None,
         'cookies': None,
