@@ -616,25 +616,61 @@ async def chrome_request(req: ChromeRequest):
         return {"ok": False, "msg": str(e), "trace": error_trace}
 
 
+from concurrent.futures import ThreadPoolExecutor
+# 全局线程池（避免频繁创建销毁线程）
+_executor = ThreadPoolExecutor(max_workers=4)
+
+
+
+async def async_eval_no_wait(code,page):
+    """
+    完全非阻塞的eval执行
+    :param code: 要执行的JS代码
+    :param page: DrissionPage的ChromiumPage实例
+    """
+    # 准备执行环境（确保线程安全）
+    safe_vars = {
+        'page': page,
+        '__builtins__': {}  # 禁用危险函数
+    }
+    
+    def execute_eval(code, variables):
+        """在独立线程中执行eval且不关心结果"""
+        try:
+            eval(code, variables, {})
+        except Exception as e:
+            print(f"⚠️ Eval执行失败（已忽略）: {type(e).__name__}: {e}")
+
+    # 在独立线程中执行（不阻塞事件循环）
+    future = asyncio.get_event_loop().run_in_executor(
+        _executor,
+        execute_eval,
+        code,
+        safe_vars
+    )
+    
+    # 立即返回控制权
+    future.add_done_callback(
+        lambda f: sys_logger.error(f"Eval操作异常: {f.exception()}") if f.done() and f.exception() else print("🎯 Eval操作已提交到后台线程") if f.done() else None
+    )
+
 async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, column_number=0, target_func_name="targetFunction", export_func_name="exposedFunction", trigger_js=None):
     # 初始化 ws 变量为 None，确保在 finally 块中可以安全引用
     ws = None
 
-    # page.run_cdp("Debugger.enable")
-    # 获取当前页面的targetId
     target_info = page.run_cdp("Target.getTargetInfo")
     target_id = target_info.get('targetInfo', {}).get('targetId')
     if not target_id:
         sys_logger.error("无法获取目标ID")
         return False
-
+    current_url = page.url
+    print('current_url', current_url)
     # 构建WebSocket URL
     ws_url = f"ws://{page.address}/devtools/page/{target_id}"
     # sys_logger.info(f"连接DevTools WebSocket: {ws_url}")
     try:
         # 移除 timeout 参数，使其兼容 Python 3.10
-        ws = await websockets.connect(ws_url)
-        # sys_logger.info("WebSocket连接已打开")
+        ws = await websockets.connect(ws_url)        # sys_logger.info("WebSocket连接已打开")
         # 启用调试器
         await ws.send(json.dumps({
             "id": 1,
@@ -650,15 +686,42 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                 "columnNumber": column_number,
             }
         }))
+        await ws.send(json.dumps({
+            "id": 3,
+            "method": "Page.enable"
+        }))
 
-        if trigger_js:
-            page.run_js(trigger_js, as_expr=True)
+        # if trigger_js:
+            # page.run_js(trigger_js, as_expr=True)
         # print("监听消息")
         # --- 第二阶段：监听消息直到满足条件 ---
         trigger_received = False
+        # 记录开始时间
+        trigger_js_executed = False
+
+        def _sync_eval(code):
+            return eval(code, {}, {'page': page})
+        
+        start_wait_time = asyncio.get_event_loop().time()
+        last_recv_time = asyncio.get_event_loop().time()
         while not trigger_received:
-            # 使用 asyncio.wait_for 设置超时，而不是在 connect 中设置
-            response = await asyncio.wait_for(ws.recv(), timeout=10)
+            # 检查是否超过3秒且还没执行过trigger_js
+            current_time = asyncio.get_event_loop().time()
+            if current_time - start_wait_time > 3 and not trigger_js_executed and trigger_js:
+                await async_eval_no_wait(trigger_js, page)
+                trigger_js_executed=True
+            try:
+                response = await asyncio.wait_for(ws.recv(), timeout=2)
+                last_recv_time = asyncio.get_event_loop().time() 
+            except asyncio.TimeoutError:
+                # 检查总等待时间是否超过5秒
+                current_wait_time = asyncio.get_event_loop().time()
+                print('已等待时间', current_wait_time-last_recv_time)
+                if current_wait_time - last_recv_time > 5:
+                    raise asyncio.TimeoutError("等待断点触发超时，总等待时间超过5秒")
+                continue
+            # print('收到消息', response)
+            
             # print(f"收到消息: {response}")
             data = json.loads(response)
             # 检查是否为断点暂停事件
@@ -670,7 +733,7 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                 if hit_breakpoints:
                     hit_id = hit_breakpoints[0]
                     trigger_received = True
-                    # print(f"断点触发")
+                    # print(f"断点触发", hit_id, call_frame_id)
 
                     # 注入辅助函数
                     # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
@@ -686,7 +749,6 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                             "expression": script
                         }
                     }))
-
                     # 移除断点
                     await ws.send(json.dumps({
                         "id": 1000,
@@ -695,14 +757,31 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                             "breakpointId": hit_id
                         }
                     }))
-
-                    # 恢复执行
                     await ws.send(json.dumps({
                         "id": 1001,
+                        "method": "Page.stopLoading",
+                        "params": {}
+                    }))
+                    # print(f"注入辅助函数", call_frame_id, script)
+                    # # 恢复执行
+                    await ws.send(json.dumps({
+                        "id": 1002,
                         "method": "Debugger.resume",
                         "params": {}
                     }))
+                    print('移除断点', hit_id)
 
+            if data.get('method') == 'Page.frameNavigated':
+                frame = data["params"]["frame"]
+                url = frame.get("url", "")
+                print('frameNavigated', url)
+                if url != 'about:blank' and url != current_url:
+                    print('stopLoading', url)
+                    await ws.send(json.dumps({
+                        "id": 1005,
+                        "method": "Page.stopLoading",
+                        "params": {}
+                    }))
     except asyncio.TimeoutError:
         sys_logger.error("操作超时，强制关闭连接")
     except websockets.exceptions.ConnectionClosed as e:
@@ -740,6 +819,8 @@ async def anti_js(api_name: str, data: AntiJsRequest, request: Request):
     """接收数据并根据API名称处理"""
     # 从请求对象中获取request_id，如果不存在则生成一个新的
     request_id = request.state.request_id if hasattr(request.state, "request_id") else str(uuid.uuid4())
+    is_debug = request.headers.get('debug', False)
+
     # 保存到请求对象中，确保中间件可以访问到
     request.state.request_id = request_id
 
@@ -826,6 +907,7 @@ Function.prototype.constructor=function(){
     }
     return Function.prototype.temp_constructor.apply(this, arguments);
 };
+console.log('覆盖反debugger成功')
         """
         init_js += "window.__antijs=true;"
         if not config.get('override_funcs'):
@@ -836,14 +918,15 @@ Function.prototype.constructor=function(){
 window.setTimeout = (callback, delay) => {
     return 0
 };
+console.log('覆盖setTimeout成功')
 """
             if method == 'all' or method == 'setInterval':
                 init_js += """
 window.setInterval = (callback, delay) => {
     return 0
 };
+console.log('覆盖setInterval成功')
 """
-
         # 获取或创建页面
         page, is_new, success, error_msg = await get_or_create_page(
             page_key=page_key,
@@ -870,13 +953,14 @@ window.setInterval = (callback, delay) => {
         inject_func_name = "___" + api_name
         # 检查函数是否存在
         check_script = """typeof window.""" + inject_func_name + """ === 'function'"""
-        injected = page.run_js(check_script, as_expr=True)
+        injected = page.run_js(check_script, as_expr=True, timeout=1)
         if not injected:
             await setup_breakpoint_and_expose_function(page, config['hijack_js_url'], line_number=config['breakpoint_line_num'], column_number=config['breakpoint_col_num'], target_func_name=config['target_func'], export_func_name=inject_func_name, trigger_js=config['trigger_js'])
-            injected = page.run_js(check_script, as_expr=True)
+            injected = page.run_js(check_script, as_expr=True, timeout=1)
         if not injected:
             log.error(f"函数注入失败")
-            cleanup_page(page, page_key, browser_id)
+            if not is_debug:
+                cleanup_page(page, page_key, browser_id)
             return JSONResponse(
                 status_code=500,
                 content={"code": 1, "msg": "调用失败, 请稍后重试。如一直不成功, 请联系管理员"}
@@ -892,7 +976,7 @@ window.setInterval = (callback, delay) => {
                 }
         """ % (json.dumps(data.data))
 
-        sign_result = page.run_js(sign_script)
+        sign_result = page.run_js(sign_script, timeout=5)
 
         # 检查结果是否包含错误
         if isinstance(sign_result, dict) and '__error__' in sign_result:
@@ -1118,10 +1202,10 @@ if __name__ == "__main__":
     if args.config:
         # 初始化数据库和缓存
         sys_logger.info(f'配置文件路径: {args.config}')
-        init_database_and_cache(args.config)
-        # 获取服务器端口
-        config = load_config(args.config)
-        server_port = config['server']['port'] if config and 'server' in config else 8889
+    init_database_and_cache(args.config)
+    # 获取服务器端口
+    config = load_config(args.config)
+    server_port = config['server']['port'] if config and 'server' in config else 8889
 
     # 预注入debank配置到website_configs中
     inject_debank_config()

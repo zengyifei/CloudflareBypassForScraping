@@ -499,6 +499,12 @@
                 .slice(0, 19);
         }
 
+        // 添加一个辅助函数，安全地设置triggerJs的值
+        function safeSetTriggerJs(element, code) {
+            // 直接使用DOM API设置值，避免HTML属性中的引号问题
+            element.value = code || '';
+        }
+
         async function showEditModal(config) {
             // 重置表单
             document.getElementById('configForm').reset();
@@ -542,7 +548,8 @@
                 document.getElementById('paramsExample').value = '';
             }
             
-            document.getElementById('triggerJs').value = config.trigger_js || '';
+            // 安全地设置触发JS字段，避免HTML引号冲突
+            safeSetTriggerJs(document.getElementById('triggerJs'), config.trigger_js);
             document.getElementById('cookies').value = config.cookies || '';
             document.getElementById('description').value = config.description || '';
             document.getElementById('isActive').checked = config.is_active;
@@ -619,7 +626,8 @@
                 const response = await fetch(apiUrl, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json'
+                        'Content-Type': 'application/json',
+                        'debug': 'true'
                     },
                     body: requestBody
                 });
@@ -747,6 +755,33 @@
                         }
                     }
                     
+                    // 创建编辑按钮
+                    const editBtn = document.createElement('button');
+                    editBtn.className = 'btn btn-primary btn-action';
+                    editBtn.title = '编辑';
+                    editBtn.innerHTML = '<i class="bi bi-pencil"></i>';
+                    editBtn.onclick = function() {
+                        showEditModal(config);
+                    };
+                    
+                    // 创建删除按钮
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'btn btn-danger btn-action';
+                    deleteBtn.title = '删除';
+                    deleteBtn.innerHTML = '<i class="bi bi-trash"></i>';
+                    deleteBtn.onclick = function() {
+                        deleteConfig(config.id);
+                    };
+                    
+                    // 创建测试按钮
+                    const testBtn = document.createElement('button');
+                    testBtn.className = 'btn btn-success btn-action';
+                    testBtn.title = '测试';
+                    testBtn.innerHTML = '<i class="bi bi-play"></i>';
+                    testBtn.onclick = function() {
+                        showTestModal(config);
+                    };
+                    
                     tr.innerHTML = `
                         <td>${config.id}</td>
                         <td>${config.api_name}</td>
@@ -772,26 +807,35 @@
                         <td>${config.is_active ? '<span class="badge bg-success">激活</span>' : '<span class="badge bg-secondary">禁用</span>'}</td>
                         <td>
                             ${config.is_page_open ? 
-                                `<span class="badge bg-success" style="cursor: pointer;" onclick="showExecuteJsModal('${config.api_name}')">已打开</span>` 
+                                `<span class="badge bg-success" style="cursor: pointer;" id="execute_${config.api_name}">已打开</span>` 
                                 : '<span class="badge bg-secondary">未打开</span>'}
                         </td>
-                        <td>
-                            <button class="btn btn-primary btn-action" onclick='showEditModal(${JSON.stringify(config)})' title="编辑">
-                                <i class="bi bi-pencil"></i>
-                            </button>
-                            <button class="btn btn-danger btn-action" onclick="deleteConfig(${config.id})" title="删除">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                            <button class="btn btn-success btn-action" onclick='showTestModal(${JSON.stringify(config)})' title="测试">
-                                <i class="bi bi-play"></i>
-                            </button>
-                            ${config.is_page_open ? 
-                                `<button class="btn btn-warning btn-action" onclick="closePage('${config.api_name}')" title="关闭页面">
-                                    <i class="bi bi-x-circle"></i>
-                                </button>` : ''}
-                        </td>
+                        <td id="actions_${config.id}"></td>
                     `;
                     tbody.appendChild(tr);
+                    
+                    // 获取操作单元格并添加按钮
+                    const actionsCell = document.getElementById(`actions_${config.id}`);
+                    actionsCell.appendChild(editBtn);
+                    actionsCell.appendChild(deleteBtn);
+                    actionsCell.appendChild(testBtn);
+                    
+                    // 如果页面已打开，添加关闭页面按钮
+                    if (config.is_page_open) {
+                        const closeBtn = document.createElement('button');
+                        closeBtn.className = 'btn btn-warning btn-action';
+                        closeBtn.title = '关闭页面';
+                        closeBtn.innerHTML = '<i class="bi bi-x-circle"></i>';
+                        closeBtn.onclick = function() {
+                            closePage(config.api_name);
+                        };
+                        actionsCell.appendChild(closeBtn);
+                        
+                        // 为"已打开"标签添加点击事件
+                        document.getElementById(`execute_${config.api_name}`).onclick = function() {
+                            showExecuteJsModal(config.api_name);
+                        };
+                    }
                 });
             } catch (error) {
                 console.error('加载配置失败:', error);
@@ -839,6 +883,10 @@
                     expireTime = formatDateTime(new Date(expireTimeInput));
                 }
                 
+                // 获取触发JS字段，保持原样不做特殊处理
+                const triggerJs = document.getElementById('triggerJs').value || null;
+                
+                // 构建配置对象
                 const config = {
                     user_name: document.getElementById('userName').value,
                     source_website: document.getElementById('sourceWebsite').value,
@@ -853,7 +901,7 @@
                     is_active: document.getElementById('isActive').checked,
                     description: document.getElementById('description').value || null,
                     override_funcs: document.getElementById('overrideFuncs').value,
-                    trigger_js: document.getElementById('triggerJs').value || null,
+                    trigger_js: triggerJs,
                     cookies: cookies || null
                 };
 
@@ -962,7 +1010,8 @@
 
         function showExecuteJsModal(apiName) {
             document.getElementById('executeJsApiName').value = apiName;
-            document.getElementById('jsCode').value = '';
+            // 使用安全方法设置空值
+            safeSetTriggerJs(document.getElementById('jsCode'), '');
             document.getElementById('jsResult').textContent = '';
             document.getElementById('isAsync').checked = false;
             executeJsModal.show();
@@ -1020,4 +1069,4 @@
         // setInterval(loadConfigs, 30000);
     </script>
 </body>
-</html> 
+</html>
