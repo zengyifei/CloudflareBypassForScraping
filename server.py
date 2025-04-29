@@ -197,6 +197,7 @@ class CookieResponse(BaseModel):
 
 
 class ChromeRequest(BaseModel):
+    debug: bool = Field(False)
     url: str = Field(...)            # Which page to enter first
     api_url: Optional[str] = Field(None)       # After entering the url, the api to call
     method: str = Field("GET")       # GET || POST
@@ -509,6 +510,27 @@ async def chrome_request(req: ChromeRequest):
     page_key = f"{req.browser_id}_{req.page_id}" if req.page_id else None
 
     try:
+        init_js =  """
+Function.prototype.temp_constructor= Function.prototype.constructor;
+Function.prototype.constructor=function(){
+    if (arguments && typeof arguments[0]==="string"){
+    if (arguments[0]==="debugger")
+        return ""
+    }
+    return Function.prototype.temp_constructor.apply(this, arguments);
+};
+console.log('覆盖反debugger成功');
+window.__antijs=true;
+
+"""
+# window.setTimeout = (callback, delay) => {
+#     return 0
+# };
+# console.log('覆盖setTimeout成功')
+# window.setInterval = (callback, delay) => {
+#     return 0
+# };
+# console.log('覆盖setInterval成功')
         # 获取或创建页面
         page, is_new, success, error_msg = await get_or_create_page(
             page_key=page_key,
@@ -516,14 +538,21 @@ async def chrome_request(req: ChromeRequest):
             url=req.url,
             cookies=req.cookies,
             cookie_domain=req.cookie_domain,
-            snapshot=req.snapshot
+            snapshot=req.snapshot,
+            init_js=init_js
         )
 
         if not success:
-            return {"ok": False, "msg": error_msg}
+            return JSONResponse(
+                                status_code=500,
+                                content={"ok": False, "msg": error_msg}
+                            )
 
         if not page:
-            return {"ok": False, "msg": "Failed to create page"}
+            return JSONResponse(
+                                status_code=500,
+                                content={"ok": False, "msg": "Failed to create page"}
+                            )
 
         # 处理请求
         if not req.api_url:
@@ -584,9 +613,12 @@ async def chrome_request(req: ChromeRequest):
                     resp_obj = json.loads(resp_data)
                 except Exception as e:
                     # 解析 JSON 失败，清理资源
-                    cleanup_page(page, page_key, req.browser_id)
-
-                    return {"ok": False, "msg": f"非 JSON 数据: {resp_data}"}
+                    if not req.debug:
+                        cleanup_page(page, page_key, req.browser_id)
+                    return JSONResponse(
+                                status_code=500,
+                                content={"ok": False, "msg": f"非 JSON 数据: {resp_data}"}
+                            )
 
         # 如果不需要缓存页面，则清理
         if not page_key:
@@ -613,7 +645,10 @@ async def chrome_request(req: ChromeRequest):
         # 清理资源
         cleanup_page(page, page_key, req.browser_id)
 
-        return {"ok": False, "msg": str(e), "trace": error_trace}
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "msg": str(e), "trace": error_trace}
+        )
 
 
 from concurrent.futures import ThreadPoolExecutor
