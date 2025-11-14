@@ -608,9 +608,9 @@
                 let params;
                 try {
                     params = JSON.parse(paramsField.value);
-                    if (!Array.isArray(params)) {
-                        throw new Error('参数必须是数组格式');
-                    }
+                    // if (!Array.isArray(params)) {
+                    //     throw new Error('参数必须是数组格式');
+                    // }
                 } catch (e) {
                     resultField.textContent = `参数解析错误: ${e.message}`;
                     resultField.className = 'form-control text-danger';
@@ -684,9 +684,9 @@
                 
                 try {
                     params = JSON.parse(paramsField.value);
-                    if (!Array.isArray(params)) {
-                        throw new Error('参数必须是数组格式');
-                    }
+                    // if (!Array.isArray(params)) {
+                    //     throw new Error('参数必须是数组格式');
+                    // }
                 } catch (e) {
                     alert(`参数解析错误: ${e.message}`);
                     return;
