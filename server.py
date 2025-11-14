@@ -1207,7 +1207,7 @@ def inject_jdsign_config():
         'source_website': 'https://www.jd.com/?country=USA',
         'hijack_js_url': 'https://storage.360buyimg.com/channel2022/jd_home/0.0.148/static/js/index.chunk.js',
         'breakpoint_line_num': 0,
-        'breakpoint_col_num': 71672,
+        'breakpoint_col_num': 71603,
         'target_func': """
 async (data) => {
     a = {
