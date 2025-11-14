@@ -711,6 +711,7 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
             "id": 1,
             "method": "Debugger.enable"
         }))
+       
         # 设置断点
         await ws.send(json.dumps({
             "id": 2,
@@ -738,22 +739,20 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
             return eval(code, {}, {'page': page})
         
         start_wait_time = asyncio.get_event_loop().time()
-        last_recv_time = asyncio.get_event_loop().time()
         while not trigger_received:
             # 检查是否超过3秒且还没执行过trigger_js
-            current_time = asyncio.get_event_loop().time()
-            if current_time - start_wait_time > 3 and not trigger_js_executed and trigger_js:
+            has_wait = asyncio.get_event_loop().time()-start_wait_time
+            if has_wait > 10:
+                raise asyncio.TimeoutError("等待断点触发超时，总等待时间超过5秒")
+
+            if has_wait > 5 and not trigger_js_executed and trigger_js:
                 await async_eval_no_wait(trigger_js, page)
                 trigger_js_executed=True
             try:
                 response = await asyncio.wait_for(ws.recv(), timeout=2)
-                last_recv_time = asyncio.get_event_loop().time() 
             except asyncio.TimeoutError:
                 # 检查总等待时间是否超过5秒
-                current_wait_time = asyncio.get_event_loop().time()
-                print('已等待时间', current_wait_time-last_recv_time)
-                if current_wait_time - last_recv_time > 5:
-                    raise asyncio.TimeoutError("等待断点触发超时，总等待时间超过5秒")
+                print('已等待时间', has_wait)
                 continue
             # print('收到消息', response)
             
@@ -1205,9 +1204,9 @@ def inject_jdsign_config():
         'api_name': 'jdsign',
         'user_name': 'system',
         'source_website': 'https://www.jd.com/?country=USA',
-        'hijack_js_url': 'https://storage.360buyimg.com/channel2022/jd_home/0.0.148/static/js/index.chunk.js',
+        'hijack_js_url': 'https://storage.360buyimg.com/jsresource/ws_js/jdwebm.js?v=pcHome',
         'breakpoint_line_num': 0,
-        'breakpoint_col_num': 71603,
+        'breakpoint_col_num': 28853,
         'target_func': """
 async (data) => {
     a = {
@@ -1216,9 +1215,9 @@ async (data) => {
       client: data.client,
       t: Date.now(),
       body: SHA256(JSON.stringify(data.body)),
-      functionId: params.functionId
+      functionId: data.functionId
     }
-    a.hst = await window.PSign.sign(a)
+    a.h5st = (await window.PSign.sign(a)).h5st
     return a
 }
 """,
@@ -1236,7 +1235,7 @@ async (data) => {
         'max_calls': None,  # 无调用次数限制
         'is_active': True,
         'description': '京东签名，代码查询requestColorEncrypto',
-        'override_funcs': 'setTimeout,setInterval',
+        'override_funcs': 'setInterval',
         'trigger_js': None,
         'cookies': None,
     }
