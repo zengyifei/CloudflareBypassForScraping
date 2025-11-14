@@ -309,7 +309,7 @@
                         </div>
                         <div class="col-12">
                             <label class="form-label">注入函数代码*</label>
-                            <textarea class="form-control" id="targetFunc" required rows="10" placeholder=''></textarea>
+                            <textarea class="form-control" id="targetFunc" required rows="10" placeholder="async (data) => {&#10;    // 编写获取数据逻辑&#10;    return data&#10;}"></textarea>
                             <small class="text-muted">请输入要注入的代码</small>
                         </div>
                         <!-- <div class="col-md-6">
@@ -465,12 +465,7 @@
             configModal = new bootstrap.Modal(document.getElementById('configModal'));
             testModal = new bootstrap.Modal(document.getElementById('testModal'));
             executeJsModal = new bootstrap.Modal(document.getElementById('executeJsModal'));
-            loadConfigs();
-
-            document.getElementById('targetFunc').placeholder =`async (data) => {
-                // 编写获取数据逻辑
-                return data
-            }`;
+            loadConfigs(); 
         });
 
         function showLoading() {
