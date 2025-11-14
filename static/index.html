@@ -453,10 +453,6 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.getElementById('targetFunc').placeholder = `async (data) => {
-            // 编写获取数据逻辑
-            return data
-        }`;
 
         let configModal;
         let currentMode = 'add';
@@ -470,6 +466,11 @@
             testModal = new bootstrap.Modal(document.getElementById('testModal'));
             executeJsModal = new bootstrap.Modal(document.getElementById('executeJsModal'));
             loadConfigs();
+
+            document.getElementById('targetFunc').placeholder =`async (data) => {
+                // 编写获取数据逻辑
+                return data
+            }`;
         });
 
         function showLoading() {
