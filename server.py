@@ -1198,6 +1198,51 @@ def inject_debank_config():
     website_configs.set(debank_config["api_name"], debank_config)
     print(f"debank_sign配置已注入到website_configs中")
 
+def inject_jdsign_config():
+    """预注入京东签名到website_configs中"""
+    jdsign_config = {
+        'id': 100000001,  
+        'api_name': 'jdsign',
+        'user_name': 'system',
+        'source_website': 'https://www.jd.com/',
+        'hijack_js_url': 'https://storage.360buyimg.com/channel2022/jd_home/0.0.148/static/js/index.chunk.js',
+        'breakpoint_line_num': 0,
+        'breakpoint_col_num': 71603,
+        'target_func': """
+async (data) => {
+    a = {
+      appid: data.appid,
+      clientVersion: data.clientVersion,
+      client: data.client,
+      t: Date.now(),
+      body: SHA256(JSON.stringify(data.body)),
+      functionId: params.functionId
+    }
+    a.hst = await window.PSign.sign(a)
+    return a
+}
+""",
+        'params_example': """{
+    "appid": "item-v3",
+    "clientVersion": "1.0.0",
+    "client": "pc",
+    "t": 1763152375461,
+    "body": {
+        "testbody": "test"
+    },
+    "functionId": "pcCart_jc_buyNow"
+}""",
+        'expire_time': None,  # 永不过期
+        'max_calls': None,  # 无调用次数限制
+        'is_active': True,
+        'description': '京东签名，代码查询requestColorEncrypto',
+        'override_funcs': 'setTimeout,setInterval',
+        'trigger_js': None,
+        'cookies': None,
+    }
+    website_configs.set(jdsign_config["api_name"], jdsign_config)
+    print(f"jdsign配置已注入到website_configs中")
+
 
 # Main entry point
 if __name__ == "__main__":
@@ -1246,6 +1291,7 @@ if __name__ == "__main__":
 
     # 预注入debank配置到website_configs中
     inject_debank_config()
+    inject_jdsign_config()
 
     uvicorn.run(app, host="0.0.0.0", port=server_port)
 

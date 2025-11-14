@@ -11,7 +11,7 @@ CREATE TABLE antijs_configs (
     hijack_js_url TEXT NOT NULL,
     breakpoint_line_num INT NOT NULL,
     breakpoint_col_num INT NOT NULL,
-    target_func VARCHAR(255) NOT NULL,
+    target_func TEXT NOT NULL,
     params_len INT,
     params_example TEXT,
     expire_time DATETIME,
