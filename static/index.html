@@ -250,7 +250,7 @@
                             <th>断点行号</th>
                             <th>断点列号</th>
                             <th>目标函数</th>
-                            <th>参数长度</th>
+                            <!-- <th>参数长度</th> -->
                             <th>过期时间</th>
                             <th>最大调用次数</th>
                             <th>已调用/剩余</th>
@@ -532,7 +532,7 @@
             document.getElementById('breakpointLineNum').value = config.breakpoint_line_num;
             document.getElementById('breakpointColNum').value = config.breakpoint_col_num;
             document.getElementById('targetFunc').value = config.target_func;
-            document.getElementById('paramsLen').value = config.params_len || '';
+            // document.getElementById('paramsLen').value = config.params_len || '';
             
             // 处理过期时间
             if (config.expire_time) {
@@ -905,7 +905,8 @@
                     breakpoint_line_num: parseInt(document.getElementById('breakpointLineNum').value),
                     breakpoint_col_num: parseInt(document.getElementById('breakpointColNum').value),
                     target_func: document.getElementById('targetFunc').value,
-                    params_len: document.getElementById('paramsLen').value ? parseInt(document.getElementById('paramsLen').value) : null,
+                    params_len: 1,
+                    // params_len: document.getElementById('paramsLen').value ? parseInt(document.getElementById('paramsLen').value) : null,
                     params_example: paramsExample || null,
                     expire_time: expireTime,
                     max_calls: document.getElementById('maxCalls').value ? parseInt(document.getElementById('maxCalls').value) : null,
