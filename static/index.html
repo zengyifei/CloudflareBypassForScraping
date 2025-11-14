@@ -304,13 +304,21 @@
                             <input type="number" class="form-control" id="breakpointColNum" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">目标函数 *</label>
+                            <textarea class="form-label">目标函数 *</label>
                             <input type="text" class="form-control" id="targetFunc" required>
                         </div>
-                        <div class="col-md-6">
+                        <div class="col-12">
+                            <label class="form-label">注入函数代码*</label>
+                            <textarea class="form-control" id="targetFunc" required rows="10" placeholder='async (data) =>{
+                                // 编写获取数据逻辑
+                                return data
+                            }'></textarea>
+                            <small class="text-muted">请输入要注入的代码</small>
+                        </div>
+                        <!-- <div class="col-md-6">
                             <label class="form-label">参数长度</label>
                             <input type="number" class="form-control" id="paramsLen">
-                        </div>
+                        </div> -->
                         <div class="col-12">
                             <label class="form-label">参数示例</label>
                             <textarea class="form-control" id="paramsExample" rows="3" placeholder='[1, "example", {"key": "value"}]'></textarea>

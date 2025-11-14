@@ -845,7 +845,7 @@ async def get_admin_page(username: str = Depends(verify_credentials)):
 
 
 class AntiJsRequest(BaseModel):
-    data: List[Any]
+    data: Any
 
 
 @app.post("/api/antijs/{api_name}")
@@ -880,13 +880,13 @@ async def anti_js(api_name: str, data: AntiJsRequest, request: Request):
                 content={"code": 1, "msg": "API不存在"}
             )
 
-        # 检查参数长度限制（如果设置了）
-        if config.get('params_len') is not None and len(data.data) != config['params_len']:
-            log.error(f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(data.data)}")
-            return JSONResponse(
-                status_code=200,
-                content={"code": 1, "msg": f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(data.data)}"}
-            )
+        # # 检查参数长度限制（如果设置了）
+        # if config.get('params_len') is not None and len(data.data) != config['params_len']:
+        #     log.error(f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(data.data)}")
+        #     return JSONResponse(
+        #         status_code=200,
+        #         content={"code": 1, "msg": f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(data.data)}"}
+        #     )
 
         # 检查配置是否过期
         if config.get('expire_time'):
@@ -1002,13 +1002,15 @@ console.log('覆盖setInterval成功')
             )
 
         sign_script = """
+            async () => {
                 try {
                     // 调用函数
-                    const result = window.""" + inject_func_name + """(...%s);
+                    const result = await window.""" + inject_func_name + """(%s);
                     return result;
                 } catch (e) {
                     return {"__error__": e.toString()};
                 }
+            }
         """ % (json.dumps(data.data))
 
         sign_result = page.run_js(sign_script, timeout=5)
