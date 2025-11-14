@@ -1204,7 +1204,7 @@ def inject_jdsign_config():
         'id': 100000001,  
         'api_name': 'jdsign',
         'user_name': 'system',
-        'source_website': 'https://www.jd.com/',
+        'source_website': 'https://www.jd.com/?country=USA',
         'hijack_js_url': 'https://storage.360buyimg.com/channel2022/jd_home/0.0.148/static/js/index.chunk.js',
         'breakpoint_line_num': 0,
         'breakpoint_col_num': 71672,
