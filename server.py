@@ -690,6 +690,16 @@ async def async_eval_no_wait(code,page):
     )
 
 async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, column_number=0, target_func_name="targetFunction", export_func_name="exposedFunction", trigger_js=None):
+    # 注入辅助函数
+    # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
+    script = """
+            console.log('目标函数', """ + target_func_name + """);
+            window.""" + export_func_name + """ = """ + target_func_name + """; 
+            """
+    if chunk_url == "":
+        page.run_js(script)
+        return
+
     # 初始化 ws 变量为 None，确保在 finally 块中可以安全引用
     ws = None
 
@@ -734,9 +744,6 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
         trigger_received = False
         # 记录开始时间
         trigger_js_executed = False
-
-        def _sync_eval(code):
-            return eval(code, {}, {'page': page})
         
         start_wait_time = asyncio.get_event_loop().time()
         while not trigger_received:
@@ -769,12 +776,6 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                     trigger_received = True
                     # print(f"断点触发", hit_id, call_frame_id)
 
-                    # 注入辅助函数
-                    # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
-                    script = """
-                            console.log('目标函数', """ + target_func_name + """);
-                            window.""" + export_func_name + """ = """ + target_func_name + """; 
-                            """
                     await ws.send(json.dumps({
                         "id": 999,
                         "method": "Debugger.evaluateOnCallFrame",
@@ -1203,10 +1204,11 @@ def inject_jdsign_config():
         'id': 100000001,  
         'api_name': 'jdsign',
         'user_name': 'system',
+        # 'source_website': 'https://item.jd.com/1503764080.html',
         'source_website': 'https://www.jd.com/?country=USA',
-        'hijack_js_url': 'https://storage.360buyimg.com/jsresource/ws_js/jdwebm.js?v=pcHome',
+        'hijack_js_url': '',
         'breakpoint_line_num': 0,
-        'breakpoint_col_num': 28853,
+        'breakpoint_col_num': 0,
         'target_func': """
 async (data) => {
     a = {
@@ -1217,8 +1219,8 @@ async (data) => {
       body: SHA256(JSON.stringify(data.body)),
       functionId: data.functionId
     }
-    a.h5st = (await window.PSign.sign(a)).h5st
-    return a
+    result = await window.PSign.sign(a)
+    return result
 }
 """,
         'params_example': """{
@@ -1234,10 +1236,11 @@ async (data) => {
         'expire_time': None,  # 永不过期
         'max_calls': None,  # 无调用次数限制
         'is_active': True,
-        'description': '京东签名，代码查询requestColorEncrypto',
+        'description': '京东签名',
         'override_funcs': 'setInterval',
         'trigger_js': None,
         'cookies': None,
+        # 'cookies':{'name': 'flash', 'value': '3_ftSo4kyrbfy8JKAtEWdA7eLw1UPJQ6XkVcx1w2F7hOWlyrYmX4mtYmfZcVwbCcStW65woXYLPn-ysdqQKNRfYomKI6igPPUv3Aw6d8TAuwX8DHWGGQuQWm7p5oh2h8dS1cf2MBtHaG5Ru9XsGMDSTFegZoIK-1CbkxDTLkuxQX0uysdlyJslmq**', 'domain': '.jd.com',},
     }
     website_configs.set(jdsign_config["api_name"], jdsign_config)
     print(f"jdsign配置已注入到website_configs中")
