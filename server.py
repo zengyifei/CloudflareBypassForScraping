@@ -1213,7 +1213,7 @@ async (data) => {
       appid: data.appid,
       clientVersion: data.clientVersion,
       client: data.client,
-      t: Date.now(),
+      t: data.t,
       body: SHA256(JSON.stringify(data.body)),
       functionId: data.functionId
     }
