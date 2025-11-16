@@ -203,8 +203,8 @@ class ChromeRequest(BaseModel):
     method: str = Field("GET")       # GET || POST
     body: Optional[str] = Field(None)
     headers: Dict[str, str] = Field(default_factory=dict)
-    cookies: Dict[str, str] = Field(default_factory=dict)
-    cookie_domain: Optional[str] = Field(None)  # Specify the domain of the cookie
+    cookies: Dict[str, str]|str = Field(None) # init_cookie， 第一次才会重置
+    reset_cookie: Dict[str, str]|str = Field(None) # 每次都会重置
 
     page_id: Optional[str] = Field(None)  # Page id, if passed will cache the page, enter resident, faster next visit. If not passed, will close the page
     # browser id, same as page_id, not passed use default window, passed will reuse window, if not exist create a new one
@@ -379,7 +379,7 @@ async def solve_cloudflare(page: ChromiumPage, retries: int = 5, log: bool = Tru
 
 
 # 修改获取或创建页面的函数，处理浏览器连接断开的情况
-async def get_or_create_page(page_key: str = None, browser_id: str = "default", url: str = None, init_js: str = None, cookies: Dict[str, str] | str = None, cookie_domain: str = None, snapshot: bool = False):
+async def get_or_create_page(page_key: str = None, browser_id: str = "default", url: str = None, init_js: str = None, init_cookie: Dict[str, str] | str = None, reset_cookie: Dict[str, str] | str = None, snapshot: bool = False):
     """
     获取或创建页面，处理页面连接断开等异常情况，自动解决 Cloudflare 挑战
     """
@@ -459,8 +459,8 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
                 "*.m4p",
                 "*.m4v",
             ])
-            if cookies:
-                page.set.cookies(cookies)
+            if init_cookie:
+                page.set.cookies(init_cookie)
             if init_js:
                 page.add_init_js(init_js)
             # 导航到 URL
@@ -497,6 +497,8 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
                 cleanup_page(page, page_key, browser_id)
                 page = None
 
+    if reset_cookie:
+        page.set.cookies(reset_cookie)
     return page, is_new, success, error_msg
 
 
@@ -536,8 +538,8 @@ window.__antijs=true;
             page_key=page_key,
             browser_id=req.browser_id,
             url=req.url,
-            cookies=req.cookies,
-            cookie_domain=req.cookie_domain,
+            init_cookie=req.cookies,
+            reset_cookie=req.reset_cookie,
             snapshot=req.snapshot,
             init_js=init_js
         )
@@ -845,6 +847,9 @@ async def get_admin_page(username: str = Depends(verify_credentials)):
 
 
 class AntiJsRequest(BaseModel):
+    # cookies格式 'name1=value1; name2=value2; path=/; domain=.example.com;'
+    cookies: Dict[str, str]|str = Field(None) # init_cookie， 第一次才会重置
+    reset_cookie: Dict[str, str]|str = Field(None) # 每次都会重置
     data: Any
 
 
@@ -962,12 +967,17 @@ window.setInterval = (callback, delay) => {
 };
 console.log('覆盖setInterval成功')
 """
+
+        cookies = data.cookies
+        if not cookies:
+            cookies = config.get('cookies')
         # 获取或创建页面
         page, is_new, success, error_msg = await get_or_create_page(
             page_key=page_key,
             browser_id=browser_id,
             init_js=init_js,
-            cookies=config.get('cookies'),
+            init_cookie=cookies,
+            reset_cookie=data.reset_cookie,
             url=config['source_website'] if not page_key in page_cache else None
         )
 
