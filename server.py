@@ -39,6 +39,22 @@ import hashlib
 # 导入共享模块
 from shared import page_cache, browser_cache, cleanup_page
 
+
+###yf
+import random
+proxys = [ x for x in os.environ.get('CHROME_PROXYS', "").strip().split(',') if x]
+if len(proxys) > 1:
+    proxys = random.sample(proxys, len(proxys))
+
+cnt = 0
+def next_proxy():
+    if len(proxys) == 0:
+        return None
+    global cnt
+    cnt += 1
+    return proxys[cnt % len(proxys)]
+###yfend
+
 # 配置日志系统
 LOG_DIR = os.path.join(os.getcwd(), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -430,7 +446,8 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
 
             # 如果浏览器不存在或连接断开，创建新浏览器
             if browser is None:
-                browser = get_or_create_browser(browser_id, init_js=init_js)
+                proxy = next_proxy()
+                browser = get_or_create_browser(browser_id, init_js=init_js,proxy=proxy)
 
             # 创建新标签页
             page = browser.new_tab()
