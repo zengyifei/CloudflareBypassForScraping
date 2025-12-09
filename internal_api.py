@@ -122,7 +122,7 @@ async def get_configs(username: str = Depends(verify_credentials)):
 
         # 如果数据库连接不可用，返回内存缓存
         cache_configs = list(website_configs.get_all().values())
-        print(f"数据库连接不可用，返回内存缓存: {cache_configs}")
+        # print(f"数据库连接不可用，返回内存缓存: {cache_configs}")
         return cache_configs
     except Exception as e:
         error_trace = traceback.format_exc()

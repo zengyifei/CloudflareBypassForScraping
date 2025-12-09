@@ -43,6 +43,7 @@ from shared import page_cache, browser_cache, cleanup_page
 ###yf
 import random
 proxys = [ x for x in os.environ.get('CHROME_PROXYS', "").strip().split(',') if x]
+print(f"proxys: {proxys}")
 if len(proxys) > 1:
     proxys = random.sample(proxys, len(proxys))
 
@@ -347,8 +348,9 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
     options.set_argument("--disable-component-update")  # 禁止组件更新检查
     options.set_argument("--disable-default-apps")  # 禁用默认应用请求
     options.set_argument("--disable-background-networking")  # 禁用默认应用请求
-    options.set_argument("--no-sandbox")  # Docker 中必需
-    options.set_argument("--disable-web-security")  # 沙箱冲突：使用 --no-sandbox 时必须配合 --disable-web-security
+    if DOCKER_MODE:
+        options.set_argument("--no-sandbox")  # Docker 中必需
+        options.set_argument("--disable-web-security")  # 沙箱冲突：使用 --no-sandbox 时必须配合 --disable-web-security
     options.set_argument("--disable-gpu")  # 在某些情况下有帮助
     options.set_argument("--disable-crash-reporter")  # 禁用奔溃报告
     options.set_argument("--disable-breakpad")  # 禁用奔溃报告
@@ -448,7 +450,6 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
             if browser is None:
                 proxy = next_proxy()
                 browser = get_or_create_browser(browser_id, init_js=init_js,proxy=proxy)
-
             # 创建新标签页
             page = browser.new_tab()
             page.set.blocked_urls([
@@ -999,7 +1000,7 @@ console.log('覆盖setInterval成功')
         )
 
         if not success:
-            log.error(f"页面创建失败: {error_msg}")
+            log.error(f"页面创建失败: {error_msg}, open website failed: {config['source_website']}", )
             return JSONResponse(
                 status_code=200,
                 content={"code": 1, "msg": "服务器内部错误"}
@@ -1191,9 +1192,8 @@ async def list_configs(username: str = Depends(verify_credentials)):
         raise HTTPException(status_code=500, detail=f"查询配置列表失败: {str(e)}")
 
 
-def inject_debank_config():
-    """预注入debank配置到website_configs中"""
-    debank_config = {
+inject_apis = [
+    {
         'id': 99999,  # 使用一个特别的ID以避免冲突
         'api_name': 'debank_sign',
         'user_name': 'system',
@@ -1221,13 +1221,8 @@ def inject_debank_config():
         'override_funcs': 'setTimeout,setInterval',
         'trigger_js': None,
         'cookies': None,
-    }
-    website_configs.set(debank_config["api_name"], debank_config)
-    print(f"debank_sign配置已注入到website_configs中")
-
-def inject_jdsign_config():
-    """预注入京东签名到website_configs中"""
-    jdsign_config = {
+    },
+    {
         'id': 100000001,  
         'api_name': 'jdsign',
         'user_name': 'system',
@@ -1268,9 +1263,60 @@ async (data) => {
         'trigger_js': None,
         'cookies': None,
         # 'cookies':{'name': 'flash', 'value': '3_ftSo4kyrbfy8JKAtEWdA7eLw1UPJQ6XkVcx1w2F7hOWlyrYmX4mtYmfZcVwbCcStW65woXYLPn-ysdqQKNRfYomKI6igPPUv3Aw6d8TAuwX8DHWGGQuQWm7p5oh2h8dS1cf2MBtHaG5Ru9XsGMDSTFegZoIK-1CbkxDTLkuxQX0uysdlyJslmq**', 'domain': '.jd.com',},
+    },
+    {
+        'id': 100000002,  
+        'api_name': 'okx_sign',
+        'user_name': 'system',
+        'source_website': 'https://web3.okx.com/zh-hans/token?hmi=500&pt=1&rb=8&tama=48&utmi=50&vmi=1000',
+        'hijack_js_url': 'https://web3.okx.com/cdn/assets/okfe/util/ont/5.8.33/ont.js',
+        'breakpoint_line_num': 0,
+        'breakpoint_col_num': 143507,
+        'target_func': """
+async (data) => {
+    return await Yr.getTokenAndSign({
+                                url: data.url,
+                                fetchConfig: data.fetchConfig,
+                                ontConfig: data.ontConfig
+                            });
+}
+""",
+        'params_example': """{
+    "url": "/priapi/v1/dx/market/v3/advanced/ranking/content?chainId=all&changePeriod=1&desc=true&holdersMin=500&inflowPeriod=1&liquidityMin=5000&openSource=false&periodType=1&riskFilter=true&stableTokenFilter=true&tradeNumPeriod=1&txsPeriod=1&volumeMin=1000&volumePeriod=1&categoryType=4&rankBy=8&tokenAgeType=2&pageSize=30&page=1&uniqueTraderMin=50&tokenAgeMax=48&totalPage=2&uniqueTraderPeriod=1&mentionedPeriod=1&t=1765274109486",
+    "fetchConfig": {
+        "method": "get"
+    },
+    "ontConfig": {
+        "useNativeTokenInApp": true,
+        "dexEnv": 0,
+        "isHandling401": false,
+        "needSign": true,
+        "requestContext": {
+            "timing": {
+                "startTime": 1765274109486,
+                "beforeSignStartTime": 1765274109486,
+                "beforeSignDur": 0
+            }
+        },
+        "timestamp": 1765274109486
     }
-    website_configs.set(jdsign_config["api_name"], jdsign_config)
-    print(f"jdsign配置已注入到website_configs中")
+}""",
+        'expire_time': None,  # 永不过期
+        'max_calls': None,  # 无调用次数限制
+        'is_active': True,
+        'description': '',
+        'override_funcs': 'setTimeout,setInterval',
+        'trigger_js': None,
+        'cookies': None,
+    },
+
+]
+
+def inject_website_configs():
+    """预注入内部js到website_configs中"""
+    for api in inject_apis:
+        website_configs.set(api["api_name"], api)
+    print(f"内部js已注入到website_configs中")
 
 
 # Main entry point
@@ -1318,9 +1364,8 @@ if __name__ == "__main__":
     config = load_config(args.config)
     server_port = config['server']['port'] if config and 'server' in config else 8889
 
-    # 预注入debank配置到website_configs中
-    inject_debank_config()
-    inject_jdsign_config()
+    # 预注入配置到website_configs中
+    inject_website_configs()
 
     uvicorn.run(app, host="0.0.0.0", port=server_port)
 
