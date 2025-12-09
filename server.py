@@ -1271,13 +1271,13 @@ async (data) => {
         'source_website': 'https://web3.okx.com/zh-hans/token?hmi=500&pt=1&rb=8&tama=48&utmi=50&vmi=1000',
         'hijack_js_url': 'https://web3.okx.com/cdn/assets/okfe/util/ont/5.8.33/ont.js',
         'breakpoint_line_num': 0,
-        'breakpoint_col_num': 143507,
+        'breakpoint_col_num': 143091,
         'target_func': """
 async (data) => {
     return await Yr.getTokenAndSign({
                                 url: data.url,
                                 fetchConfig: data.fetchConfig,
-                                ontConfig: data.ontConfig
+                                ontConfig: i
                             });
 }
 """,
@@ -1285,20 +1285,6 @@ async (data) => {
     "url": "/priapi/v1/dx/market/v3/advanced/ranking/content?chainId=all&changePeriod=1&desc=true&holdersMin=500&inflowPeriod=1&liquidityMin=5000&openSource=false&periodType=1&riskFilter=true&stableTokenFilter=true&tradeNumPeriod=1&txsPeriod=1&volumeMin=1000&volumePeriod=1&categoryType=4&rankBy=8&tokenAgeType=2&pageSize=30&page=1&uniqueTraderMin=50&tokenAgeMax=48&totalPage=2&uniqueTraderPeriod=1&mentionedPeriod=1&t=1765274109486",
     "fetchConfig": {
         "method": "get"
-    },
-    "ontConfig": {
-        "useNativeTokenInApp": true,
-        "dexEnv": 0,
-        "isHandling401": false,
-        "needSign": true,
-        "requestContext": {
-            "timing": {
-                "startTime": 1765274109486,
-                "beforeSignStartTime": 1765274109486,
-                "beforeSignDur": 0
-            }
-        },
-        "timestamp": 1765274109486
     }
 }""",
         'expire_time': None,  # 永不过期
