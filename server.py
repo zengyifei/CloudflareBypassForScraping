@@ -245,33 +245,10 @@ async def send_lark_alert(url: str, params: Any, status_code: int, error_msg: st
 
 # 请求失败统计和报警中间件
 class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
-    """统计请求失败情况并发送报警的中间件（使用内存存储）"""
+    """统计请求失败情况并发送报警的中间件（使用内存存储，不读取请求体避免阻塞）"""
     
     async def dispatch(self, request: Request, call_next):
-        # 预先读取并保存请求体（用于报警，不影响路由处理）
-        request_body_data = None
-        if request.method in ["POST", "PUT", "PATCH"]:
-            try:
-                body_bytes = await request.body()
-                if body_bytes:
-                    try:
-                        # 尝试解析为JSON
-                        request_body_data = json.loads(body_bytes)
-                    except:
-                        # 如果不是JSON，保存原始字符串（限制长度）
-                        try:
-                            request_body_data = body_bytes.decode('utf-8', errors='ignore')[:1000]
-                        except:
-                            request_body_data = "无法解析请求体"
-                
-                # 重新设置请求体，以便路由可以正常读取
-                async def receive():
-                    return {"type": "http.request", "body": body_bytes}
-                request._receive = receive
-            except Exception as e:
-                sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
-        
-        # 处理请求
+        # 处理请求（不预先读取请求体，避免阻塞路由处理）
         response = await call_next(request)
         
         # 只统计非200状态码的请求
@@ -313,7 +290,7 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                         should_alert = True
                     
                     if should_alert:
-                        # 构建请求参数用于报警
+                        # 构建请求参数用于报警（不读取请求体，避免阻塞）
                         request_params = {
                             "method": request.method
                         }
@@ -322,21 +299,23 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                         if request.query_params:
                             request_params["query_params"] = dict(request.query_params)
                         
-                        # 添加请求体（如果已读取）
-                        if request_body_data is not None:
-                            request_params["body"] = request_body_data
+                        # 尝试从request.state获取请求体（如果路由已经解析过）
+                        if hasattr(request.state, 'body'):
+                            request_params["body"] = request.state.body
                         
-                        # 发送报警
-                        await send_lark_alert(
-                            url=str(request.url),
-                            params=request_params,
-                            status_code=response.status_code,
-                            error_msg=None
+                        # 使用后台任务发送报警，不阻塞响应返回
+                        asyncio.create_task(
+                            send_lark_alert(
+                                url=str(request.url),
+                                params=request_params,
+                                status_code=response.status_code,
+                                error_msg=None
+                            )
                         )
                         
                         # 记录报警时间
                         alert_sent_storage[api_path] = current_timestamp
-                        sys_logger.warning(f"接口 {api_path} 1小时内失败 {failure_count} 次，已发送报警")
+                        sys_logger.warning(f"接口 {api_path} 1小时内失败 {failure_count} 次，已触发报警任务")
                 
             except Exception as e:
                 # 报警逻辑出错不应该影响正常请求
