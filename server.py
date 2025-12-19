@@ -267,7 +267,15 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                 sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
         
         # 处理请求
-        response = await call_next(request)
+        try:
+            response = await call_next(request)
+        except Exception as e:
+            # 这里捕获处理异常，你可以根据需要添加日志或其他处理
+            print('Exception',str(e))
+            response = JSONResponse(
+                status_code=500,
+                content={"code": 1, "msg": f"内部服务器错误: {str(e)}"}
+            )
         
         # 只统计非200状态码的请求
         if response.status_code != 200:
