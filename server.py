@@ -23,6 +23,7 @@ import asyncio
 import websockets
 import json
 from starlette.middleware.base import BaseHTTPMiddleware
+import requests
 
 # 添加loguru用于日志记录
 from loguru import logger
@@ -193,6 +194,158 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 # 添加请求ID中间件
 app.add_middleware(RequestIDMiddleware)
+
+# 硬编码Lark webhook地址（请替换为实际的webhook地址）
+lark_webhook_url = "https://open.feishu.cn/open-apis/bot/v2/hook/72345854-38fa-4c1c-89a9-197c0bcd26b8"
+
+# 内存存储：用于统计请求失败情况
+# failure_times: {api_path: [timestamp1, timestamp2, ...]}  # 存储失败时间戳列表
+# alert_sent: {api_path: timestamp}  # 存储上次报警时间
+failure_times_storage = {}
+alert_sent_storage = {}
+
+# 发送Lark报警消息
+async def send_lark_alert(url: str, params: Any, status_code: int, error_msg: str = None):
+    """发送Lark报警消息"""
+    global lark_webhook_url
+    
+    if not lark_webhook_url:
+        return False
+    
+    try:
+        # 构建报警消息
+        message = {
+            "msg_type": "text",
+            "content": {
+                "text": f"⚠️ 接口请求失败报警\n\n"
+                       f"接口URL: {url}\n"
+                       f"状态码: {status_code}\n"
+                       f"请求参数: {json.dumps(params, ensure_ascii=False, indent=2)}\n"
+                       + (f"错误信息: {error_msg}\n" if error_msg else "")
+                       + f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            }
+        }
+        
+        # 使用线程池执行同步的requests调用，避免阻塞事件循环
+        def send_request():
+            response = requests.post(lark_webhook_url, json=message, timeout=5.0)
+            return response
+        
+        response = await asyncio.to_thread(send_request)
+        
+        if response.status_code == 200:
+            sys_logger.info(f"Lark报警发送成功: {url}")
+            return True
+        else:
+            sys_logger.error(f"Lark报警发送失败: {response.status_code} - {response.text}")
+            return False
+    except Exception as e:
+        sys_logger.error(f"发送Lark报警时出错: {str(e)}")
+        return False
+
+# 请求失败统计和报警中间件
+class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
+    """统计请求失败情况并发送报警的中间件（使用内存存储）"""
+    
+    async def dispatch(self, request: Request, call_next):
+        # 预先读取并保存请求体（用于报警，不影响路由处理）
+        request_body_data = None
+        if request.method in ["POST", "PUT", "PATCH"]:
+            try:
+                body_bytes = await request.body()
+                if body_bytes:
+                    try:
+                        # 尝试解析为JSON
+                        request_body_data = json.loads(body_bytes)
+                    except:
+                        # 如果不是JSON，保存原始字符串（限制长度）
+                        try:
+                            request_body_data = body_bytes.decode('utf-8', errors='ignore')[:1000]
+                        except:
+                            request_body_data = "无法解析请求体"
+                
+                # 重新设置请求体，以便路由可以正常读取
+                async def receive():
+                    return {"type": "http.request", "body": body_bytes}
+                request._receive = receive
+            except Exception as e:
+                sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
+        
+        # 处理请求
+        response = await call_next(request)
+        
+        # 只统计非200状态码的请求
+        if response.status_code != 200:
+            try:
+                # 获取请求路径作为接口标识
+                api_path = request.url.path
+                current_time = datetime.now()
+                current_timestamp = int(current_time.timestamp())
+                
+                # 使用内存存储失败记录（滑动窗口，1小时）
+                if api_path not in failure_times_storage:
+                    failure_times_storage[api_path] = []
+                
+                # 添加当前失败记录
+                failure_times_storage[api_path].append(current_timestamp)
+                
+                # 清理1小时前的记录
+                one_hour_ago = current_timestamp - 3600
+                failure_times_storage[api_path] = [
+                    ts for ts in failure_times_storage[api_path] if ts > one_hour_ago
+                ]
+                
+                # 获取1小时内的失败次数
+                failure_count = len(failure_times_storage[api_path])
+                
+                # 检查是否需要发送报警
+                if failure_count >= 10:
+                    # 检查24小时内是否已发送过报警
+                    last_alert_timestamp = alert_sent_storage.get(api_path)
+                    should_alert = False
+                    
+                    if last_alert_timestamp:
+                        # 如果距离上次报警超过24小时，可以再次报警
+                        if current_timestamp - last_alert_timestamp >= 86400:  # 24小时 = 86400秒
+                            should_alert = True
+                    else:
+                        # 从未发送过报警，可以发送
+                        should_alert = True
+                    
+                    if should_alert:
+                        # 构建请求参数用于报警
+                        request_params = {
+                            "method": request.method
+                        }
+                        
+                        # 添加查询参数
+                        if request.query_params:
+                            request_params["query_params"] = dict(request.query_params)
+                        
+                        # 添加请求体（如果已读取）
+                        if request_body_data is not None:
+                            request_params["body"] = request_body_data
+                        
+                        # 发送报警
+                        await send_lark_alert(
+                            url=str(request.url),
+                            params=request_params,
+                            status_code=response.status_code,
+                            error_msg=None
+                        )
+                        
+                        # 记录报警时间
+                        alert_sent_storage[api_path] = current_timestamp
+                        sys_logger.warning(f"接口 {api_path} 1小时内失败 {failure_count} 次，已发送报警")
+                
+            except Exception as e:
+                # 报警逻辑出错不应该影响正常请求
+                sys_logger.error(f"请求失败统计中间件出错: {str(e)}")
+        
+        return response
+
+# 添加请求失败统计和报警中间件
+app.add_middleware(RequestFailureAlertMiddleware)
 
 # 添加静态文件服务
 app.mount("/static", StaticFiles(directory="static"), name="static")
