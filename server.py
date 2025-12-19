@@ -247,27 +247,7 @@ async def send_lark_alert(url: str, params: Any, status_code: int, error_msg: st
 class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
     """统计请求失败情况并发送报警的中间件（使用内存存储）"""
     
-    async def dispatch(self, request: Request, call_next):
-        # 预先读取并保存请求体（用于报警，不影响路由处理）
-        request_body_data = None
-        
-        if request.method in ["POST", "PUT", "PATCH"]:
-            body_bytes = await request.body()
-            # 重新创建receive函数，以便路由可以正常读取请求体
-            async def receive():
-                return {"type": "http.request", "body": body_bytes}
-            request._receive = receive
-            if body_bytes:
-                try:
-                    # 尝试解析为JSON
-                    request_body_data = json.loads(body_bytes)
-                except:
-                    # 如果不是JSON，保存原始字符串（限制长度）
-                    try:
-                        request_body_data = body_bytes.decode('utf-8', errors='ignore')[:1000]
-                    except:
-                        request_body_data = "无法解析请求体"
-        
+    async def dispatch(self, request: Request, call_next): 
         response = await call_next(request)
         
         # 只统计非200状态码的请求
@@ -316,12 +296,8 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                         
                         # 添加查询参数
                         if request.query_params:
-                            request_params["query_params"] = dict(request.query_params)
-                        
-                        # 添加请求体（如果已读取）
-                        if request_body_data is not None:
-                            request_params["body"] = request_body_data
-                        
+                            request_params["query_params"] = dict(request.query_params) 
+
                         # 发送报警
                         asyncio.create_task(
                             send_lark_alert(
