@@ -269,10 +269,7 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                 # 重新创建receive函数，以便路由可以正常读取请求体
                 async def receive():
                     return {"type": "http.request", "body": body_bytes}
-                
-                # 重新创建Request对象，使用新的receive函数
-                from starlette.requests import Request as StarletteRequest
-                request = StarletteRequest(request.scope, receive)
+                request._receive = receive
             except Exception as e:
                 sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
         
