@@ -616,7 +616,12 @@ async def get_or_create_page(page_key: str = None, browser_id: str = "default", 
             if init_js:
                 page.add_init_js(init_js)
             # 导航到 URL
-            page.get(url, timeout=10)
+            page.get(url, timeout=10, retry=0)
+            
+            if page.url == 'about:blank':
+                success = False
+                error_msg = "页面加载失败"
+                return page, is_new, success, error_msg
 
             # 自动尝试解决 Cloudflare 挑战
             solved = await solve_cloudflare(page)
