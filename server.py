@@ -442,6 +442,13 @@ def bypass_cloudflare(url: str, retries: int, log: bool, proxy: str = None) -> C
         raise e
 
 
+@app.get("/")
+async def health():
+    return JSONResponse(
+                status_code=200,
+                content={"msg": "ok"}
+            )
+
 # Endpoint to get cookies
 @app.get("/cookies", response_model=CookieResponse)
 async def get_cookies(url: str, retries: int = 5, proxy: str = None):
