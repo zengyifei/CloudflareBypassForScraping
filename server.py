@@ -250,21 +250,21 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 预先读取并保存请求体（用于报警，不影响路由处理）
         request_body_data = None
-        # if request.method in ["POST", "PUT", "PATCH"]:
-        #     try:
-        #         body_bytes = await request.body()
-        #         if body_bytes:
-        #             try:
-        #                 # 尝试解析为JSON
-        #                 request_body_data = json.loads(body_bytes)
-        #             except:
-        #                 # 如果不是JSON，保存原始字符串（限制长度）
-        #                 try:
-        #                     request_body_data = body_bytes.decode('utf-8', errors='ignore')[:1000]
-        #                 except:
-        #                     request_body_data = "无法解析请求体"
-        #     except Exception as e:
-        #         sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
+        if request.method in ["POST", "PUT", "PATCH"]:
+            try:
+                body_bytes = await request.body()
+                if body_bytes:
+                    try:
+                        # 尝试解析为JSON
+                        request_body_data = json.loads(body_bytes)
+                    except:
+                        # 如果不是JSON，保存原始字符串（限制长度）
+                        try:
+                            request_body_data = body_bytes.decode('utf-8', errors='ignore')[:1000]
+                        except:
+                            request_body_data = "无法解析请求体"
+            except Exception as e:
+                sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
         
         # 处理请求
         response = await call_next(request)
