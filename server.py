@@ -250,11 +250,13 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 预先读取并保存请求体（用于报警，不影响路由处理）
         request_body_data = None
-        body_bytes = None
         
         if request.method in ["POST", "PUT", "PATCH"]:
             body_bytes = await request.body()
-            request._body = body_bytes
+            # 重新创建receive函数，以便路由可以正常读取请求体
+            async def receive():
+                return {"type": "http.request", "body": body_bytes}
+            request._receive = receive
             if body_bytes:
                 try:
                     # 尝试解析为JSON
@@ -265,22 +267,8 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                         request_body_data = body_bytes.decode('utf-8', errors='ignore')[:1000]
                     except:
                         request_body_data = "无法解析请求体"
-    
-        # 处理请求
-        response = None
-        try:
-            response = await call_next(request)
-            sys_logger.info("response", response, response.status_code)
-            
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            # 这里捕获处理异常，你可以根据需要添加日志或其他处理
-            sys_logger.error(f"中间件处理请求异常: {str(e)}")
-            response = JSONResponse(
-                status_code=500,
-                content={"code": 1, "msg": f"内部服务器错误: {str(e)}"}
-            )
+        
+        response = await call_next(request)
         
         # 只统计非200状态码的请求
         if response.status_code != 200:
