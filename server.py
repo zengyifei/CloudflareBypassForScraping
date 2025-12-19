@@ -277,8 +277,11 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                 sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
         
         # 处理请求
+        response = None
         try:
             response = await call_next(request)
+            sys_logger.info("response", response, response.status_code)
+            
         except Exception as e:
             import traceback
             traceback.print_exc()
