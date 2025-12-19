@@ -870,15 +870,21 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
     try:
         # 移除 timeout 参数，使其兼容 Python 3.10
         ws = await websockets.connect(ws_url)        # sys_logger.info("WebSocket连接已打开")
+        def id_generator(start=1):
+            current_id = start
+            while True:
+                yield current_id
+                current_id += 1
+        next_id = lambda gen_obj=id_generator(): next(gen_obj)
         # 启用调试器
         await ws.send(json.dumps({
-            "id": 1,
+            "id": next_id(),
             "method": "Debugger.enable"
         }))
        
         # 设置断点
         await ws.send(json.dumps({
-            "id": 2,
+            "id": next_id(),
             "method": "Debugger.setBreakpointByUrl",
             "params": {
                 "url": chunk_url,
@@ -887,7 +893,7 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
             }
         }))
         await ws.send(json.dumps({
-            "id": 3,
+            "id": next_id(),
             "method": "Page.enable"
         }))
 
@@ -931,7 +937,7 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                     # print(f"断点触发", hit_id, call_frame_id)
 
                     await ws.send(json.dumps({
-                        "id": 999,
+                        "id": next_id(),
                         "method": "Debugger.evaluateOnCallFrame",
                         "params": {
                             "callFrameId": call_frame_id,
@@ -940,21 +946,21 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                     }))
                     # 移除断点
                     await ws.send(json.dumps({
-                        "id": 1000,
+                        "id": next_id(),
                         "method": "Debugger.removeBreakpoint",
                         "params": {
                             "breakpointId": hit_id
                         }
                     }))
                     await ws.send(json.dumps({
-                        "id": 1001,
+                        "id": next_id(),
                         "method": "Page.stopLoading",
                         "params": {}
                     }))
                     # print(f"注入辅助函数", call_frame_id, script)
                     # # 恢复执行
                     await ws.send(json.dumps({
-                        "id": 1002,
+                        "id": next_id(),
                         "method": "Debugger.resume",
                         "params": {}
                     }))
@@ -967,7 +973,7 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
                 if url != 'about:blank' and url != current_url:
                     print('stopLoading', url)
                     await ws.send(json.dumps({
-                        "id": 1005,
+                        "id": next_id(),
                         "method": "Page.stopLoading",
                         "params": {}
                     }))
