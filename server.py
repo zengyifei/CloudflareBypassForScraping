@@ -250,6 +250,8 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # 预先读取并保存请求体（用于报警，不影响路由处理）
         request_body_data = None
+        body_bytes = None
+        
         if request.method in ["POST", "PUT", "PATCH"]:
             try:
                 body_bytes = await request.body()
@@ -263,6 +265,14 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
                             request_body_data = body_bytes.decode('utf-8', errors='ignore')[:1000]
                         except:
                             request_body_data = "无法解析请求体"
+                
+                # 重新创建receive函数，以便路由可以正常读取请求体
+                async def receive():
+                    return {"type": "http.request", "body": body_bytes}
+                
+                # 重新创建Request对象，使用新的receive函数
+                from starlette.requests import Request as StarletteRequest
+                request = StarletteRequest(request.scope, receive)
             except Exception as e:
                 sys_logger.debug(f"读取请求体失败（不影响请求处理）: {str(e)}")
         
@@ -270,8 +280,10 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             # 这里捕获处理异常，你可以根据需要添加日志或其他处理
-            print('Exception',str(e))
+            sys_logger.error(f"中间件处理请求异常: {str(e)}")
             response = JSONResponse(
                 status_code=500,
                 content={"code": 1, "msg": f"内部服务器错误: {str(e)}"}
