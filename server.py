@@ -118,8 +118,8 @@ arguments = [
 ]
 
 # 在文件顶部添加环境变量设置
-# BROWSER_TYPE = os.getenv("BROWSER_TYPE", "edge").lower()  # 默认使用 Edge，可以通过环境变量覆盖
-BROWSER_TYPE = os.getenv("BROWSER_TYPE", "chrome").lower()  # 默认使用 Edge，可以通过环境变量覆盖
+BROWSER_TYPE = os.getenv("BROWSER_TYPE", "edge").lower()  # 默认使用 Edge，可以通过环境变量覆盖
+# BROWSER_TYPE = os.getenv("BROWSER_TYPE", "chrome").lower()  # 默认使用 Edge，可以通过环境变量覆盖
 
 # 根据系统查找 Edge 浏览器路径
 if BROWSER_TYPE == "edge":
@@ -137,7 +137,7 @@ if BROWSER_TYPE == "edge":
         if os.path.exists(path):
             browser_path = path
             break
-
+    print(f"browser_path: {browser_path}")
     if not browser_path:
         sys_logger.warning("Microsoft Edge not found, using default browser")
         browser_path = "/usr/bin/google-chrome"  # 默认路径
@@ -151,6 +151,8 @@ if BROWSER_TYPE == "chrome":
     co = ChromiumOptions()
     co.set_browser_path(browser_path)
     co.save()  # 保存配置，这样后续启动都会使用这个设置
+
+
 
 app = FastAPI()
 
