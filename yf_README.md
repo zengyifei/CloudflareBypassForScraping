@@ -1,3 +1,6 @@
+服务器上启动的话，记得先在项目下执行`pip install -r server_requirements.txt`.然后下面配置文件的用户名和项目路径，以及重启时间和内存限额配下  
+还有就是服务器上得保证安装了xvfb, `apt update && apt install -y xvfb`
+
 服务器上yf_chrome 配置文件的位置: `sudo vim /etc/systemd/system/yf_chrome.service`  
 停止服务: `sudo systemctl stop yf_chrome`  
 启动服务: `sudo systemctl start yf_chrome`  
