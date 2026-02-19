@@ -1414,12 +1414,12 @@ async (data) => {
         'api_name': 'okx_sign',
         'user_name': 'system',
         'source_website': 'https://web3.okx.com/zh-hans/token?hmi=500&pt=1&rb=8&tama=48&utmi=50&vmi=1000',
-        'hijack_js_url': 'https://web3.okx.com/cdn/assets/okfe/util/ont/5.8.36/ont.js',
+        'hijack_js_url': 'https://web3.okx.com/cdn/assets/okfe/util/ont/5.8.41/ont.js',
         'breakpoint_line_num': 0,
-        'breakpoint_col_num': 146424,
+        'breakpoint_col_num': 146729,
         'target_func': """
 async (data) => {
-    return await oo.getTokenAndSign({
+    return await io.getTokenAndSign({
                                 url: data.url,
                                 fetchConfig: data.fetchConfig,
                                 ontConfig: i
