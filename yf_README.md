@@ -40,6 +40,9 @@ TimeoutStopSec=10
 KillMode=mixed
 User=ubuntu
 WorkingDirectory=/home/ubuntu/CloudflareBypassForScraping
+# 配置环境变量
+Environment="BROWSER_TYPE=edge"
+Environment="CHROME_PROXYS=http://localhost:7890"
 
 # 内存超限自动重启
 MemoryMax=1500M    
