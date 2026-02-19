@@ -41,26 +41,10 @@ import hashlib
 from shared import page_cache, browser_cache, cleanup_page
 
 
-###yf
-import random
-proxys = [ x for x in os.environ.get('CHROME_PROXYS', "").strip().split(',') if x]
-print(f"proxys: {proxys}")
-if len(proxys) > 1:
-    proxys = random.sample(proxys, len(proxys))
-
-cnt = 0
-def next_proxy():
-    if len(proxys) == 0:
-        return None
-    global cnt
-    cnt += 1
-    return proxys[cnt % len(proxys)]
-###yfend
 
 # 配置日志系统
 LOG_DIR = os.path.join(os.getcwd(), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
-
 # 移除默认的logger配置
 logger.remove()
 # 添加控制台输出
@@ -87,6 +71,27 @@ logger.add(
 
 # 系统日志辅助函数
 sys_logger = logger.bind(request_id="SYSTEM")
+
+
+
+
+###yf
+import random
+proxys = [ x for x in os.environ.get('CHROME_PROXYS', "").strip().split(',') if x]
+print(f"proxys: {proxys}")
+if len(proxys) > 1:
+    proxys = random.sample(proxys, len(proxys))
+logger.info(f"proxys: {proxys}")
+
+cnt = 0
+def next_proxy():
+    if len(proxys) == 0:
+        return None
+    global cnt
+    cnt += 1
+    return proxys[cnt % len(proxys)]
+###yfend
+
 
 # 设置请求限速器，1秒最多10个请求
 limiter = Limiter(key_func=get_remote_address, default_limits=["10/second"])
