@@ -1,0 +1,65 @@
+{
+  "next_id": 1005,
+  "configs": [
+    {
+      "id": 1000,
+      "api_name": "test",
+      "user_name": "system",
+      "source_website": "https://www.google.com",
+      "hijack_js_url": "",
+      "breakpoint_line_num": 0,
+      "breakpoint_col_num": 0,
+      "target_func": "\nasync (data) => {\nreturn document.documentElement.outerHTML;\n}\n",
+      "params_example": "{}",
+      "description": "",
+      "override_funcs": "setTimeout,setInterval",
+      "trigger_js": null,
+      "cookies": null
+    },
+    {
+      "id": 1001,
+      "api_name": "debank_sign",
+      "user_name": "system",
+      "source_website": "https://debank.com/profile/0x3fe861679bd8ec58dd45460ffd38ee39107aaff8/history",
+      "hijack_js_url": "https://assets.debank.com/static/js/6129.fbaacfcf.chunk.js",
+      "breakpoint_line_num": 1,
+      "breakpoint_col_num": 45819,
+      "target_func": "x",
+      "params_example": "[\n  {\n            \"user_addr\":\"0x3fe861679bd8ec58dd45460ffd38ee39107aaff8\",\n            \"chain\": \"\",\n            \"start_time\": 0,\n            \"page_count\": 20\n        },\n  \"GET\",\n  \"/history/list\",\n  {\"version\": \"v2\"}\n]",
+      "description": "自动注入的debank签名API, 搜索\"gsD\"",
+      "override_funcs": "setTimeout,setInterval",
+      "trigger_js": null,
+      "cookies": null
+    },
+    {
+      "id": 1002,
+      "api_name": "jdsign",
+      "user_name": "system",
+      "source_website": "https://www.jd.com/?country=USA",
+      "hijack_js_url": "",
+      "breakpoint_line_num": 0,
+      "breakpoint_col_num": 0,
+      "target_func": "\nasync (data) => {\n    a = {\n      appid: data.appid,\n      clientVersion: data.clientVersion,\n      client: data.client,\n      t: data.t,\n      body: SHA256(JSON.stringify(data.body)),\n      functionId: data.functionId\n    }\n    result = await window.PSign.sign(a)\n    return result\n}\n",
+      "params_example": "{\n    \"appid\": \"item-v3\",\n    \"clientVersion\": \"1.0.0\",\n    \"client\": \"pc\",\n    \"t\": 1763152375461,\n    \"body\": {\n        \"testbody\": \"test\"\n    },\n    \"functionId\": \"pcCart_jc_buyNow\"\n}",
+      "description": "京东签名",
+      "override_funcs": "setInterval",
+      "trigger_js": null,
+      "cookies": null
+    },
+    {
+      "id": 1003,
+      "api_name": "okx_sign",
+      "user_name": "system",
+      "source_website": "https://web3.okx.com/zh-hans/token?hmi=500&pt=1&rb=8&tama=48&utmi=50&vmi=1000",
+      "hijack_js_url": "https://web3.okx.com/cdn/assets/okfe/util/ont/5.8.41/ont.js",
+      "breakpoint_line_num": 0,
+      "breakpoint_col_num": 146729,
+      "target_func": "\nasync (data) => {\n    return await io.getTokenAndSign({\n                                url: data.url,\n                                fetchConfig: data.fetchConfig,\n                                ontConfig: i\n                            });\n}\n",
+      "params_example": "{\n    \"url\": \"/priapi/v1/dx/market/v3/advanced/ranking/content?chainId=all&changePeriod=1&desc=true&holdersMin=500&inflowPeriod=1&liquidityMin=5000&openSource=false&periodType=1&riskFilter=true&stableTokenFilter=true&tradeNumPeriod=1&txsPeriod=1&volumeMin=1000&volumePeriod=1&categoryType=4&rankBy=8&tokenAgeType=2&pageSize=30&page=1&uniqueTraderMin=50&tokenAgeMax=48&totalPage=2&uniqueTraderPeriod=1&mentionedPeriod=1&t=1765274109486\",\n    \"fetchConfig\": {\n        \"method\": \"get\"\n    }\n}",
+      "description": "",
+      "override_funcs": "setTimeout,setInterval",
+      "trigger_js": null,
+      "cookies": null
+    }
+  ]
+}

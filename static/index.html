@@ -257,9 +257,8 @@
                             <th>API名称</th>
                             <th>用户名</th>
                             <th>源网站</th>
-                            <!-- 暂时隐藏：JS URL、断点行号、断点列号、目标函数、过期时间、最大调用次数、已调用/剩余 -->
+                            <!-- 暂时隐藏：JS URL、断点行号、断点列号、目标函数 -->
                             <th>覆盖函数</th>
-                            <th>状态</th>
                             <th>操作</th>
                         </tr>
                     </thead>
@@ -287,58 +286,37 @@
                             <small class="text-muted">API名称由系统自动生成且不可修改</small>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">用户名 *</label>
+                            <label class="form-label" for="userName">用户名 *</label>
                             <input type="text" class="form-control" id="userName" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">源网站 *</label>
+                            <label class="form-label" for="sourceWebsite">源网站 *</label>
                             <input type="text" class="form-control" id="sourceWebsite" required>
                         </div>
                         <div class="col-12">
-                            <label class="form-label">JS URL *</label>
+                            <label class="form-label" for="hijackJsUrl">JS URL *</label>
                             <input type="text" class="form-control" id="hijackJsUrl" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">断点行号 *</label>
+                            <label class="form-label" for="breakpointLineNum">断点行号 *</label>
                             <input type="number" class="form-control" id="breakpointLineNum" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">断点列号 *</label>
+                            <label class="form-label" for="breakpointColNum">断点列号 *</label>
                             <input type="number" class="form-control" id="breakpointColNum" required>
                         </div>
                         <div class="col-12">
-                            <label class="form-label">注入函数代码*</label>
+                            <label class="form-label" for="targetFunc">注入函数代码 *</label>
                             <textarea class="form-control" id="targetFunc" required rows="10" placeholder="async (data) => {&#10;    // 编写获取数据逻辑&#10;    return data&#10;}"></textarea>
                             <small class="text-muted">请输入要注入的代码</small>
                         </div>
-                        <!-- <div class="col-md-6">
-                            <label class="form-label">参数长度</label>
-                            <input type="number" class="form-control" id="paramsLen">
-                        </div> -->
                         <div class="col-12">
-                            <label class="form-label">参数示例</label>
+                            <label class="form-label" for="paramsExample">参数示例</label>
                             <textarea class="form-control" id="paramsExample" rows="3" placeholder='[1, "example", {"key": "value"}]'></textarea>
                             <small class="text-muted">请输入JSON格式的参数示例数组</small>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label">过期时间</label>
-                            <input type="datetime-local" class="form-control" id="expireTime">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">最大调用次数</label>
-                            <input type="number" class="form-control" id="maxCalls" min="1">
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">是否激活</label>
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="isActive" checked>
-                                <label class="form-check-label" for="isActive">
-                                    激活状态（勾选后配置会加载到内存中）
-                                </label>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">覆盖函数</label>
+                            <label class="form-label" for="overrideFuncs">覆盖函数</label>
                             <input type="text" class="form-control" id="overrideFuncs" placeholder="setTimeout,setInterval" value="setTimeout,setInterval">
                             <small class="text-muted">要覆盖的JavaScript函数，用逗号分隔</small>
                         </div>
@@ -526,17 +504,6 @@
             document.getElementById('breakpointLineNum').value = config.breakpoint_line_num;
             document.getElementById('breakpointColNum').value = config.breakpoint_col_num;
             document.getElementById('targetFunc').value = config.target_func;
-            // document.getElementById('paramsLen').value = config.params_len || '';
-            
-            // 处理过期时间
-            if (config.expire_time) {
-                const date = new Date(config.expire_time);
-                document.getElementById('expireTime').value = formatDateTimeLocal(date);
-            } else {
-                document.getElementById('expireTime').value = '';
-            }
-            
-            document.getElementById('maxCalls').value = config.max_calls || '';
             document.getElementById('overrideFuncs').value = config.override_funcs || 'setTimeout,setInterval';
             
             // 添加对params_example的JSON美化处理
@@ -557,8 +524,7 @@
             safeSetTriggerJs(document.getElementById('triggerJs'), config.trigger_js);
             document.getElementById('cookies').value = config.cookies || '';
             document.getElementById('description').value = config.description || '';
-            document.getElementById('isActive').checked = config.is_active;
-            
+
             // 显示API名称行
             document.getElementById('apiNameRow').style.display = 'block';
             
@@ -793,7 +759,6 @@
                         <td>${config.user_name}</td>
                         <td title="${config.source_website}">${config.source_website}</td>
                         <td>${config.override_funcs || 'setTimeout,setInterval'}</td>
-                        <td>${config.is_active ? '<span class="badge bg-success">激活</span>' : '<span class="badge bg-secondary">禁用</span>'}</td>
                         <td class="td_actions" id="actions_${config.id}"></td>
                     `;
                     tbody.appendChild(tr);
@@ -847,7 +812,9 @@
                 for (const field of requiredFields) {
                     const element = document.getElementById(field);
                     if (!element.value.trim()) {
-                        alert(`请填写${element.labels[0].textContent.replace(' *', '')}`);
+                        const labelEl = element.labels && element.labels[0];
+                        const labelText = labelEl ? labelEl.textContent.replace(/\s*\*\s*$/, '').trim() : field;
+                        alert(`请填写${labelText}`);
                         element.focus();
                         hideLoading();
                         return;
@@ -867,19 +834,10 @@
                     }
                 }
 
-                // cookies已改为字符串格式，不需要检查JSON格式
+                // cookies 已改为字符串格式，不需要检查 JSON 格式
                 let cookies = document.getElementById('cookies').value.trim();
-
-                let expireTime = null;
-                const expireTimeInput = document.getElementById('expireTime').value;
-                if (expireTimeInput) {
-                    expireTime = formatDateTime(new Date(expireTimeInput));
-                }
-                
-                // 获取触发JS字段，保持原样不做特殊处理
                 const triggerJs = document.getElementById('triggerJs').value || null;
-                
-                // 构建配置对象
+
                 const config = {
                     user_name: document.getElementById('userName').value,
                     source_website: document.getElementById('sourceWebsite').value,
@@ -887,12 +845,7 @@
                     breakpoint_line_num: parseInt(document.getElementById('breakpointLineNum').value),
                     breakpoint_col_num: parseInt(document.getElementById('breakpointColNum').value),
                     target_func: document.getElementById('targetFunc').value,
-                    params_len: 1,
-                    // params_len: document.getElementById('paramsLen').value ? parseInt(document.getElementById('paramsLen').value) : null,
                     params_example: paramsExample || null,
-                    expire_time: expireTime,
-                    max_calls: document.getElementById('maxCalls').value ? parseInt(document.getElementById('maxCalls').value) : null,
-                    is_active: document.getElementById('isActive').checked,
                     description: document.getElementById('description').value || null,
                     override_funcs: document.getElementById('overrideFuncs').value,
                     trigger_js: triggerJs,

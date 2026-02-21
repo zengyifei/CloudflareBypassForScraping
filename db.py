@@ -1,190 +1,46 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-import yaml
+"""
+配置加载：仅从 YAML 读取服务配置，API 配置由 models.website_configs 从本地 JSON 文件加载。
+不再使用 MySQL / Redis。
+"""
 import os
-from sqlalchemy.ext.declarative import declarative_base
-import json
-import traceback
-import redis
-
-Base = declarative_base()
-db_session = None
-redis_client = None
-redis_prefix = 'antijs:'
-
-# 从配置文件加载数据库配置
+import yaml
 
 
 def load_config(config_path=None):
-    """从配置文件加载数据库配置
-
-    Args:
-        config_path: 配置文件路径，如果不提供则不使用数据库
-
-    Returns:
-        dict: 配置字典，如果加载失败则返回None
+    """
+    从 YAML 配置文件加载（如 server.port 等）。
+    config_path 为空则不使用配置文件。
+    返回配置字典，失败返回 None。
     """
     try:
-        if not config_path:
-            print("未提供配置文件路径，将不使用数据库")
+        if not config_path or not os.path.isfile(config_path):
             return None
-        with open(config_path, 'r') as f:
-            config = yaml.safe_load(f)
-        return config
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
     except Exception as e:
-        print(f"加载配置文件失败: {str(e)}")
+        print(f"加载配置文件失败: {config_path}, {e}")
         return None
 
 
-def init_redis(config=None):
-    """初始化Redis连接"""
-    global redis_client, redis_prefix
-
-    if not config:
-        # 默认配置
-        host = 'localhost'
-        port = 6379
-        db = 0
-        password = None
-    else:
-        # 从配置文件读取
-        host = config['redis'].get('host', 'localhost')
-        port = config['redis'].get('port', 6379)
-        db = config['redis'].get('db', 0)
-        password = config['redis'].get('password') if config['redis'].get('password') else None
-        redis_prefix = config['redis'].get('prefix', 'antijs:')
-
-    try:
-        # 创建Redis连接
-        redis_client = redis.Redis(
-            host=host,
-            port=port,
-            db=db,
-            password=password,
-            decode_responses=True  # 自动将响应解码为字符串
-        )
-        # 测试连接
-        redis_client.ping()
-        print(f"Redis连接成功: {host}:{port}/{db}")
-        return True
-    except Exception as e:
-        print(f"Redis连接失败: {str(e)}")
-        redis_client = None
-        return False
-
-
-def init_database_and_cache(config_path=None):
-    """初始化数据库和内存缓存
-
-    Args:
-        config_path: 配置文件路径，如果不提供则不使用数据库
-
-    Returns:
-        bool: 初始化是否成功
+def init_api_config_from_file(config_path=None):
     """
-    global db_session
-    engine = None
+    启动时从本地 JSON 文件加载 API 配置到 website_configs。
+    文件路径优先级：环境变量 API_CONFIG_FILE > 默认 ./data/api_configs.json。
+    若提供了 config_path（YAML），可从其中读取 api_config_file 键覆盖路径（可选）。
+    返回是否加载成功。
+    """
+    from models import website_configs
 
-    # 如果没有提供配置文件路径，则不使用数据库
-    if not config_path:
-        print("未提供配置文件路径，将不使用数据库")
-        # 确保内存缓存初始化正确
-        try:
-            from models import website_configs
-            website_configs.sanitize_configs()
-        except Exception as e:
-            print(f"处理内存缓存失败: {str(e)}")
-        return True
-
-    try:
+    filepath = os.getenv("API_CONFIG_FILE")
+    if not filepath and config_path:
         config = load_config(config_path)
-        if not config:
-            print("无法加载配置")
-            return False
+        if config and isinstance(config.get("api_config_file"), str):
+            filepath = config["api_config_file"]
+    if not filepath:
+        filepath = os.path.join(os.getcwd(), "data", "api_configs.json")
 
-        # 初始化Redis
-        init_redis(config)
-
-        # 创建数据库引擎
-        db_url = f"mysql+pymysql://{config['mysql']['user']}:{config['mysql']['password']}@{config['mysql']['host']}:{config['mysql']['port']}/{config['mysql']['database']}"
-        engine = create_engine(
-            db_url,
-            pool_recycle=1800,  # 30分钟内回收连接，避免MySQL超时断开
-            pool_pre_ping=True   # 在使用连接前先ping测试，自动处理失效连接
-        )
-
-        # 创建表
-        Base.metadata.create_all(engine)
-
-        # 创建会话
-        Session = sessionmaker(bind=engine)
-        db_session = Session()
-
-        # 从数据库直接加载数据到内存缓存
-        try:
-            from models import AntiJsConfig, website_configs
-
-            # 清空当前缓存
-            website_configs.clear()
-
-            # 从数据库加载活跃配置
-            configs = db_session.query(AntiJsConfig).filter(AntiJsConfig.is_active == True).all()
-
-            for config in configs:
-                if not config.api_name:
-                    print(f"警告: 配置 ID {config.id} 没有api_name，跳过缓存")
-                    continue
-
-                config_dict = {
-                    'id': config.id,
-                    'user_name': config.user_name,
-                    'source_website': config.source_website,
-                    'hijack_js_url': config.hijack_js_url,
-                    'breakpoint_line_num': config.breakpoint_line_num,
-                    'breakpoint_col_num': config.breakpoint_col_num,
-                    'target_func': config.target_func,
-                    'expire_time': config.expire_time,
-                    'max_calls': config.max_calls,
-                    'is_active': config.is_active,
-                    'params_len': config.params_len,
-                    'api_name': config.api_name,
-                    'override_funcs': config.override_funcs,
-                    'trigger_js': config.trigger_js,
-                    'cookies': config.cookies,
-                }
-                # 直接使用api_name作为键保存配置
-                website_configs.set(config.api_name, config_dict)
-
-            # 确保所有缓存的配置格式一致
-            website_configs.sanitize_configs()
-            print(f"成功加载 {len(configs)} 条配置到内存缓存")
-        except Exception as e:
-            print(f"加载配置到内存缓存失败: {str(e)}")
-            return False
-
-        print("数据库初始化成功")
-        return True
-
-    except Exception as e:
-        print(f"数据库连接失败: {str(e)}")
-        # 即使数据库连接失败，也确保内存缓存格式正确
-        try:
-            from models import website_configs
-            website_configs.sanitize_configs()
-        except Exception as e_cache:
-            print(f"处理内存缓存失败: {str(e_cache)}")
-        return False
-
-# 导出数据库会话的getter方法
-
-
-def get_db_session():
-    """获取数据库会话"""
-    global db_session
-    return db_session
-
-
-def get_redis_client():
-    """获取Redis客户端连接"""
-    global redis_client
-    return redis_client
+    ok = website_configs.load_from_file(filepath)
+    if ok:
+        n = len(website_configs.get_all_list())
+        print(f"已从本地文件加载 {n} 条 API 配置: {filepath}")
+    return ok

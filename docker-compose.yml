@@ -1,3 +1,5 @@
+# API 配置持久化：将宿主机目录挂载到容器内，便于备份与迁移
+# 配置文件名由环境变量 API_CONFIG_FILE 指定，默认 /data/api_configs.json
 services:
   app:
     build: .
@@ -7,5 +9,10 @@ services:
       - "8889:8889"
     environment:
       - BROWSER_TYPE=edge
+      # 可选：指定 API 配置存储路径，便于挂载到宿主机
+      - API_CONFIG_FILE=/data/api_configs.json
+    volumes:
+      # 挂载 data 目录，容器内 /data 对应宿主机 ./data，重启或迁移后配置不丢失
+      - ./data:/data
     # 无头浏览器建议加大共享内存，避免崩溃
     shm_size: "6g"

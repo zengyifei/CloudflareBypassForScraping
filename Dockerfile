@@ -81,3 +81,6 @@ ENTRYPOINT ["/docker_startup.sh"]
 
 # 使用宿主机代理
 # docker run -d --name yf_chrome --shm-size=4g -p 8889:8889 --add-host=host.docker.internal:host-gateway -e CHROME_PROXYS=http://host.docker.internal:7890 yf_chrome
+#
+# API 配置持久化：建议挂载 data 目录并设置 API_CONFIG_FILE，便于复制迁移
+# docker run -d ... -v $(pwd)/data:/data -e API_CONFIG_FILE=/data/api_configs.json yf_chrome

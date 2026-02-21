@@ -1,16 +1,6 @@
-mysql:
-    host: localhost
-    port: 3306
-    user: root
-    password: Cd32d5e86e
-    database: shaomai
-
-redis:
-    host: localhost
-    port: 6379
-    db: 0
-    password: # 留空表示无密码
-    prefix: 'antijs:' # 键前缀
-
+# 服务端口等配置（API 配置已改为本地 JSON 文件存储，无需 MySQL/Redis）
 server:
-    port: 8889
+  port: 8889
+
+# 可选：指定 API 配置 JSON 文件路径，不填则使用环境变量 API_CONFIG_FILE 或默认 ./data/api_configs.json
+# api_config_file: /path/to/api_configs.json

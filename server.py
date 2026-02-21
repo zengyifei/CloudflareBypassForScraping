@@ -33,9 +33,9 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from models import AntiJsConfig, website_configs, init_db
+from models import website_configs
 from internal_api import router as internal_api_router, verify_credentials
-from db import load_config, init_database_and_cache, get_db_session, get_redis_client, redis_prefix
+from db import load_config, init_api_config_from_file
 import hashlib
 import threading
 import time
@@ -1068,48 +1068,6 @@ async def anti_js(api_name: str, data: AntiJsRequest, request: Request):
         #         content={"code": 1, "msg": f"参数长度不匹配，应为 {config['params_len']}，实际为 {len(data.data)}"}
         #     )
 
-        # 检查配置是否过期
-        if config.get('expire_time'):
-            expire_time = config['expire_time']
-            if isinstance(expire_time, str):
-                expire_time = datetime.strptime(expire_time, '%Y-%m-%d %H:%M:%S')
-            if datetime.now() > expire_time:
-                log.error("API已过期")
-                return JSONResponse(
-                    status_code=200,
-                    content={"code": 1, "msg": "API已过期"}
-                )
-
-        # 检查最大调用次数限制
-        if config.get('max_calls') is not None:
-            # 使用Redis跟踪API调用次数
-            redis_client = get_redis_client()
-
-            if redis_client:
-                # 使用api_name作为Redis键的一部分
-                redis_key = f"{redis_prefix}call_count:{api_name}"
-
-                # 获取当前调用次数
-                current_count = redis_client.get(redis_key)
-                current_count = int(current_count) if current_count else 0
-
-                # 检查是否超过最大调用次数
-                if current_count >= config['max_calls']:
-                    log.error("可用次数已用完")
-                    return JSONResponse(
-                        status_code=200,
-                        content={"code": 1, "msg": "可用次数已用完"}
-                    )
-
-                # 增加调用计数（使用pipeline确保原子性）
-                pipe = redis_client.pipeline()
-                pipe.incr(redis_key)
-                # 默认30天后过期（可以根据需要调整）
-                pipe.expire(redis_key, 60 * 60 * 24 * 30)
-
-                # 执行Redis命令
-                pipe.execute()
-
         page_key = get_page_key(config['source_website'])
 
         init_js = """
@@ -1260,26 +1218,17 @@ async def get_page_status(username: str = Depends(verify_credentials)):
 @internal_api_router.post("/api/close_page/{api_name}")
 async def close_page(api_name: str, username: str = Depends(verify_credentials)):
     """关闭指定API名称对应的页面"""
-    # 获取API对应的配置
-    db = get_db_session()
-    if not db:
-        return {"success": False, "message": "数据库连接失败"}
-
+    config = website_configs.get_by_api_name(api_name)
+    if not config:
+        return {"success": False, "message": "找不到对应的API配置"}
     try:
-        config = db.query(AntiJsConfig).filter(AntiJsConfig.api_name == api_name).first()
-        if not config:
-            return {"success": False, "message": "找不到对应的API配置"}
-
-        page_key = get_page_key(config.source_website)
+        page_key = get_page_key(config["source_website"])
         browser_id = "default"
         if page_key in page_cache:
-            # 获取页面对象
             page = page_cache[page_key]
-            # 关闭页面
             cleanup_page(page, page_key, browser_id)
             return {"success": True, "message": f"成功关闭 {api_name} 的页面"}
-        else:
-            return {"success": False, "message": "页面未打开或已关闭"}
+        return {"success": False, "message": "页面未打开或已关闭"}
     except Exception as e:
         import traceback
         error_trace = traceback.format_exc()
@@ -1290,61 +1239,34 @@ async def close_page(api_name: str, username: str = Depends(verify_credentials))
 
 @internal_api_router.get("/api/configs")
 async def list_configs(username: str = Depends(verify_credentials)):
-    db = get_db_session()
-    if not db:
-        raise HTTPException(status_code=500, detail="数据库连接失败")
-
+    """返回所有 API 配置列表（来自本地文件加载的 memory cache）"""
     configs = []
-    try:
-        # 查询配置列表
-        db_configs = db.query(AntiJsConfig).order_by(AntiJsConfig.id.desc()).all()
-
-        # 转换为字典列表
-        for config in db_configs:
-            config_dict = {
-                "id": config.id,
-                "api_name": config.api_name,
-                "user_name": config.user_name,
-                "source_website": config.source_website,
-                "hijack_js_url": config.hijack_js_url,
-                "breakpoint_line_num": config.breakpoint_line_num,
-                "breakpoint_col_num": config.breakpoint_col_num,
-                "target_func": config.target_func,
-                "params_len": config.params_len,
-                "params_example": config.params_example,
-                "expire_time": config.expire_time.strftime('%Y-%m-%d %H:%M:%S') if config.expire_time else None,
-                "max_calls": config.max_calls,
-                "is_active": config.is_active,
-                "description": config.description,
-                "override_funcs": config.override_funcs,
-                "trigger_js": config.trigger_js,
-                "cookies": config.cookies
-            }
-
-            # 获取调用次数
-            redis_client = get_redis_client()
-            if redis_client and config.max_calls:
-                redis_key = f"{redis_prefix}call_count:{config.api_name}"
-                call_count = redis_client.get(redis_key)
-                call_count = int(call_count) if call_count else 0
-                config_dict["call_count"] = call_count
-                # 计算使用百分比
-                config_dict["call_percentage"] = min(100, round(call_count / config.max_calls * 100, 2))
-
-            page_key = get_page_key(config.source_website)
-            config_dict["is_page_open"] = page_key in page_cache
-            config_dict["page_key"] = page_key
-
-            configs.append(config_dict)
-
-        return configs
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"查询配置列表失败: {str(e)}")
+    for c in website_configs.get_all_list():
+        config_dict = {
+            "id": c.get("id"),
+            "api_name": c.get("api_name"),
+            "user_name": c.get("user_name"),
+            "source_website": c.get("source_website"),
+            "hijack_js_url": c.get("hijack_js_url"),
+            "breakpoint_line_num": c.get("breakpoint_line_num"),
+            "breakpoint_col_num": c.get("breakpoint_col_num"),
+            "target_func": c.get("target_func"),
+            "params_example": c.get("params_example"),
+            "description": c.get("description"),
+            "override_funcs": c.get("override_funcs"),
+            "trigger_js": c.get("trigger_js"),
+            "cookies": c.get("cookies"),
+        }
+        page_key = get_page_key(c.get("source_website", ""))
+        config_dict["is_page_open"] = page_key in page_cache
+        config_dict["page_key"] = page_key
+        configs.append(config_dict)
+    return configs
 
 
 inject_apis = [
     {   
-        'id': -1,  
+        'id': 1000,  
         'api_name': 'test',
         'user_name': 'system',
         'source_website': 'https://www.google.com',
@@ -1357,16 +1279,13 @@ return document.documentElement.outerHTML;
 }
 """,
         'params_example': """{}""",
-        'expire_time': None,  # 永不过期
-        'max_calls': None,  # 无调用次数限制
-        'is_active': True,
         'description': '',
         'override_funcs': 'setTimeout,setInterval',
         'trigger_js': None,
         'cookies': None,
     },
     {
-        'id': 99999,  # 使用一个特别的ID以避免冲突
+        'id': 1001,  # 使用一个特别的ID以避免冲突
         'api_name': 'debank_sign',
         'user_name': 'system',
         'source_website': 'https://debank.com/profile/0x3fe861679bd8ec58dd45460ffd38ee39107aaff8/history',
@@ -1374,7 +1293,6 @@ return document.documentElement.outerHTML;
         'breakpoint_line_num': 1,
         'breakpoint_col_num': 45819,
         'target_func': 'x',
-        'params_len': 4,  # 请求方法、路由、数据
         'params_example': """[
   {
             "user_addr":"0x3fe861679bd8ec58dd45460ffd38ee39107aaff8",
@@ -1386,16 +1304,13 @@ return document.documentElement.outerHTML;
   "/history/list",
   {"version": "v2"}
 ]""",
-        'expire_time': None,  # 永不过期
-        'max_calls': None,  # 无调用次数限制
-        'is_active': True,
         'description': '自动注入的debank签名API, 搜索"gsD"',
         'override_funcs': 'setTimeout,setInterval',
         'trigger_js': None,
         'cookies': None,
     },
     {
-        'id': 100000001,  
+        'id': 1002,  
         'api_name': 'jdsign',
         'user_name': 'system',
         # 'source_website': 'https://item.jd.com/1503764080.html',
@@ -1427,9 +1342,6 @@ async (data) => {
     },
     "functionId": "pcCart_jc_buyNow"
 }""",
-        'expire_time': None,  # 永不过期
-        'max_calls': None,  # 无调用次数限制
-        'is_active': True,
         'description': '京东签名',
         'override_funcs': 'setInterval',
         'trigger_js': None,
@@ -1437,7 +1349,7 @@ async (data) => {
         # 'cookies':{'name': 'flash', 'value': '3_ftSo4kyrbfy8JKAtEWdA7eLw1UPJQ6XkVcx1w2F7hOWlyrYmX4mtYmfZcVwbCcStW65woXYLPn-ysdqQKNRfYomKI6igPPUv3Aw6d8TAuwX8DHWGGQuQWm7p5oh2h8dS1cf2MBtHaG5Ru9XsGMDSTFegZoIK-1CbkxDTLkuxQX0uysdlyJslmq**', 'domain': '.jd.com',},
     },
     {
-        'id': 100000002,  
+        'id': 1003,  
         'api_name': 'okx_sign',
         'user_name': 'system',
         'source_website': 'https://web3.okx.com/zh-hans/token?hmi=500&pt=1&rb=8&tama=48&utmi=50&vmi=1000',
@@ -1459,9 +1371,6 @@ async (data) => {
         "method": "get"
     }
 }""",
-        'expire_time': None,  # 永不过期
-        'max_calls': None,  # 无调用次数限制
-        'is_active': True,
         'description': '',
         'override_funcs': 'setTimeout,setInterval',
         'trigger_js': None,
@@ -1516,12 +1425,11 @@ if __name__ == "__main__":
 
     server_port = 8889
     if args.config:
-        # 初始化数据库和缓存
         sys_logger.info(f'配置文件路径: {args.config}')
-    init_database_and_cache(args.config)
-    # 获取服务器端口
+    init_api_config_from_file(args.config)
     config = load_config(args.config)
-    server_port = config['server']['port'] if config and 'server' in config else 8889
+    if config and 'server' in config:
+        server_port = config['server'].get('port', 8889)
 
     # 预注入配置到website_configs中
     inject_website_configs()
