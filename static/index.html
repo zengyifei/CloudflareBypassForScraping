@@ -181,6 +181,13 @@
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        /* 操作列保持一行显示所有按钮，给足宽度避免被裁切 */
+        .table td.td_actions {
+            max-width: none;
+            min-width: 320px;
+            overflow: visible;
+            white-space: nowrap;
+        }
 
         /* 操作按钮样式 */
         .btn-action {
@@ -190,6 +197,10 @@
 
         .btn-action i {
             font-size: 0.875rem;
+        }
+
+        .btn_action_text {
+            font-size: 0.75rem;
         }
 
         /* 加载动画 */
@@ -246,17 +257,9 @@
                             <th>API名称</th>
                             <th>用户名</th>
                             <th>源网站</th>
-                            <th>JS URL</th>
-                            <th>断点行号</th>
-                            <th>断点列号</th>
-                            <th>目标函数</th>
-                            <!-- <th>参数长度</th> -->
-                            <th>过期时间</th>
-                            <th>最大调用次数</th>
-                            <th>已调用/剩余</th>
+                            <!-- 暂时隐藏：JS URL、断点行号、断点列号、目标函数、过期时间、最大调用次数、已调用/剩余 -->
                             <th>覆盖函数</th>
                             <th>状态</th>
-                            <th>页面状态</th>
                             <th>操作</th>
                         </tr>
                     </thead>
@@ -789,55 +792,43 @@
                         <td>${config.api_name}</td>
                         <td>${config.user_name}</td>
                         <td title="${config.source_website}">${config.source_website}</td>
-                        <td title="${config.hijack_js_url}">${config.hijack_js_url}</td>
-                        <td>${config.breakpoint_line_num}</td>
-                        <td>${config.breakpoint_col_num}</td>
-                        <td>${config.target_func}</td>
-                        <td>${config.params_len || '-'}</td>
-                        <td>${config.expire_time || '-'}</td>
-                        <td>${config.max_calls || '-'}</td>
-                        <td>
-                            ${config.max_calls ? 
-                                `${config.call_count || 0}/${config.max_calls} ${usageStatus}
-                                <div class="progress" style="height: 5px;">
-                                    <div class="progress-bar ${(config.call_percentage || 0) >= 90 ? 'bg-danger' : (config.call_percentage || 0) >= 70 ? 'bg-warning' : 'bg-success'}" 
-                                        style="width: ${config.call_percentage || 0}%"></div>
-                                </div>` 
-                                : '-'}
-                        </td>
                         <td>${config.override_funcs || 'setTimeout,setInterval'}</td>
                         <td>${config.is_active ? '<span class="badge bg-success">激活</span>' : '<span class="badge bg-secondary">禁用</span>'}</td>
-                        <td>
-                            ${config.is_page_open ? 
-                                `<span class="badge bg-success" style="cursor: pointer;" id="execute_${config.api_name}">已打开</span>` 
-                                : '<span class="badge bg-secondary">未打开</span>'}
-                        </td>
-                        <td id="actions_${config.id}"></td>
+                        <td class="td_actions" id="actions_${config.id}"></td>
                     `;
                     tbody.appendChild(tr);
-                    
-                    // 获取操作单元格并添加按钮
+
                     const actionsCell = document.getElementById(`actions_${config.id}`);
                     actionsCell.appendChild(editBtn);
                     actionsCell.appendChild(deleteBtn);
                     actionsCell.appendChild(testBtn);
-                    
-                    // 如果页面已打开，添加关闭页面按钮
-                    if (config.is_page_open) {
-                        const closeBtn = document.createElement('button');
-                        closeBtn.className = 'btn btn-warning btn-action';
-                        closeBtn.title = '关闭页面';
-                        closeBtn.innerHTML = '<i class="bi bi-x-circle"></i>';
-                        closeBtn.onclick = function() {
-                            closePage(config.api_name);
-                        };
-                        actionsCell.appendChild(closeBtn);
-                        
-                        // 为"已打开"标签添加点击事件
-                        document.getElementById(`execute_${config.api_name}`).onclick = function() {
-                            showExecuteJsModal(config.api_name);
-                        };
-                    }
+
+                    const execJsBtn = document.createElement('button');
+                    execJsBtn.className = 'btn btn-secondary btn-action btn_action_text';
+                    execJsBtn.title = '执行JS';
+                    execJsBtn.textContent = '执行js';
+                    execJsBtn.onclick = function() {
+                        showExecuteJsModal(config.api_name);
+                    };
+                    actionsCell.appendChild(execJsBtn);
+
+                    const snapshotBtn = document.createElement('button');
+                    snapshotBtn.className = 'btn btn-info btn-action btn_action_text';
+                    snapshotBtn.title = '查看截图';
+                    snapshotBtn.textContent = '截图';
+                    snapshotBtn.onclick = function() {
+                        viewSnapshot(config.api_name);
+                    };
+                    actionsCell.appendChild(snapshotBtn);
+
+                    const closeBtn = document.createElement('button');
+                    closeBtn.className = 'btn btn-warning btn-action btn_action_text';
+                    closeBtn.title = '关闭页面';
+                    closeBtn.textContent = '关闭';
+                    closeBtn.onclick = function() {
+                        closePage(config.api_name);
+                    };
+                    actionsCell.appendChild(closeBtn);
                 });
             } catch (error) {
                 console.error('加载配置失败:', error);
@@ -975,6 +966,34 @@
                 alert('删除失败: ' + error.message);
             } finally {
                 hideLoading();
+            }
+        }
+
+        /** 调用服务端截图接口，保存到 snapshots 并在新标签页打开查看 */
+        async function viewSnapshot(apiName) {
+            try {
+                showLoading();
+                const response = await fetch(`/internal/api/snapshot?api_name=${encodeURIComponent(apiName)}`, {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+
+                if (response.status === 401) {
+                    window.location.href = '/admin';
+                    return;
+                }
+
+                const result = await response.json();
+                hideLoading();
+
+                if (response.ok && result.url) {
+                    window.open(result.url, '_blank');
+                } else {
+                    alert(result.detail || result.message || '截图失败');
+                }
+            } catch (error) {
+                hideLoading();
+                alert('截图请求失败: ' + error.message);
             }
         }
 

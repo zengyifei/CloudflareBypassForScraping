@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, HTTPException, Depends, status
 from fastapi.security import HTTPBasicCredentials, HTTPBasic
 from typing import List, Dict, Any, Optional
@@ -10,7 +11,7 @@ import json
 import yaml
 import hashlib
 # 导入共享模块
-from shared import page_cache, cleanup_page
+from shared import page_cache, cleanup_page, get_page_key
 from pydantic import BaseModel
 
 # 定义API路由器 - 移到顶部避免循环导入问题
@@ -104,8 +105,8 @@ async def get_configs(username: str = Depends(verify_credentials)):
                         config_dict['call_count'] = current_count
                         config_dict['call_percentage'] = round(current_count / c.max_calls * 100, 2) if c.max_calls > 0 else 0
 
-                    # 添加页面状态信息
-                    page_key = hashlib.md5(c.source_website.encode()).hexdigest()
+                    # 添加页面状态信息（与 server 存页面的 key 计算方式一致，使用 get_page_key）
+                    page_key = get_page_key(c.source_website)
                     config_dict['is_page_open'] = page_key in page_cache
                     config_dict['page_key'] = page_key
 
@@ -420,8 +421,7 @@ async def get_page_status(username: str = Depends(verify_credentials)):
     result = {}
     for api_name, config in configs.items():
         # 检查页面是否在缓存中
-        # 对source_website做MD5处理，与anti_js路由中的处理方式一致
-        page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+        page_key = get_page_key(config['source_website'])
         is_page_open = page_key in page_cache
         result[api_name] = {
             "is_page_open": is_page_open,
@@ -444,8 +444,7 @@ async def close_page(api_name: str, username: str = Depends(verify_credentials))
         if not config:
             return {"success": False, "message": "找不到对应的API配置"}
 
-        # 对source_website做MD5处理，与anti_js路由中的处理方式一致
-        page_key = hashlib.md5(config.source_website.encode()).hexdigest()
+        page_key = get_page_key(config.source_website)
         browser_id = "default"
 
         # 检查页面是否在缓存中
@@ -479,10 +478,7 @@ async def execute_js(api_name: str, request: ExecuteJsRequest, username: str = D
         if not config:
             return {"success": False, "message": "找不到对应的API配置"}
 
-        # 对source_website做MD5处理
-        page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
-
-        # 检查页面是否在缓存中
+        page_key = get_page_key(config['source_website'])
         if page_key not in page_cache:
             return {"success": False, "message": "页面未打开，请先调用API"}
 
@@ -506,3 +502,26 @@ async def execute_js(api_name: str, request: ExecuteJsRequest, username: str = D
         import traceback
         error_trace = traceback.format_exc()
         return {"success": False, "message": f"处理请求时出错: {str(e)}", "error": error_trace}
+
+
+@router.get("/snapshot")
+async def take_snapshot(api_name: str, username: str = Depends(verify_credentials)):
+    """对指定 API 对应的已打开标签页截一张图，保存到项目 snapshots 目录并返回访问 URL"""
+    config = website_configs.get_by_api_name(api_name)
+    if not config:
+        raise HTTPException(status_code=404, detail="找不到对应的 API 配置")
+    page_key = get_page_key(config["source_website"])
+    if page_key not in page_cache:
+        raise HTTPException(status_code=404, detail="该页面未打开或已关闭，请先调用接口打开页面")
+    page = page_cache[page_key]
+    # 使用项目下的 snapshots 目录（与 server 中 SNAPSHOTS_DIR 一致）
+    snapshots_dir = os.path.join(os.getcwd(), "snapshots")
+    os.makedirs(snapshots_dir, exist_ok=True)
+    filename = f"{api_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png"
+    filepath = os.path.join(snapshots_dir, filename)
+    try:
+        # ChromiumTab 使用 get_screenshot(path=...)，无 save_screenshot
+        page.get_screenshot(path=filepath)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"截图失败: {str(e)}")
+    return {"url": f"/snapshots/{filename}"}

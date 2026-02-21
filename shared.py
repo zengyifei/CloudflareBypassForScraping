@@ -1,10 +1,16 @@
 """
 共享模块，存放在多个模块之间共享的对象，避免循环导入问题
 """
+import hashlib
 
 # 页面和浏览器缓存
 page_cache = {}
 browser_cache = {}
+
+
+def get_page_key(source_website: str) -> str:
+    """根据 source_website 计算 page_cache 的 key，统一做 strip 避免 DB 与内存不一致导致 is_page_open 判断错误"""
+    return hashlib.md5((source_website or "").strip().encode()).hexdigest()
 
 # 清理页面的函数
 

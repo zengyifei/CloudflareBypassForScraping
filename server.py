@@ -37,8 +37,10 @@ from models import AntiJsConfig, website_configs, init_db
 from internal_api import router as internal_api_router, verify_credentials
 from db import load_config, init_database_and_cache, get_db_session, get_redis_client, redis_prefix
 import hashlib
+import threading
+import time
 # 导入共享模块
-from shared import page_cache, browser_cache, cleanup_page
+from shared import page_cache, browser_cache, cleanup_page, get_page_key
 
 
 
@@ -328,8 +330,11 @@ class RequestFailureAlertMiddleware(BaseHTTPMiddleware):
 # 添加请求失败统计和报警中间件
 app.add_middleware(RequestFailureAlertMiddleware)
 
-# 添加静态文件服务
+# 截图保存目录，供内部 API 写入、前端通过 /snapshots 访问
+SNAPSHOTS_DIR = os.path.join(os.getcwd(), "snapshots")
+os.makedirs(SNAPSHOTS_DIR, exist_ok=True)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/snapshots", StaticFiles(directory=SNAPSHOTS_DIR), name="snapshots")
 
 # 添加内部API路由
 app.include_router(internal_api_router)
@@ -1105,8 +1110,7 @@ async def anti_js(api_name: str, data: AntiJsRequest, request: Request):
                 # 执行Redis命令
                 pipe.execute()
 
-        # 对source_website做MD5处理
-        page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+        page_key = get_page_key(config['source_website'])
 
         init_js = """
 Function.prototype.temp_constructor= Function.prototype.constructor;
@@ -1243,9 +1247,7 @@ async def get_page_status(username: str = Depends(verify_credentials)):
     for config in configs:
         api_name = config.get('api_name')
         if api_name:
-            # 检查页面是否在缓存中
-            # 对source_website做MD5处理，与anti_js路由中的处理方式一致
-            page_key = hashlib.md5(config['source_website'].encode()).hexdigest()
+            page_key = get_page_key(config['source_website'])
             is_page_open = page_key in page_cache
             result[api_name] = {
                 "is_page_open": is_page_open,
@@ -1268,11 +1270,8 @@ async def close_page(api_name: str, username: str = Depends(verify_credentials))
         if not config:
             return {"success": False, "message": "找不到对应的API配置"}
 
-        # 对source_website做MD5处理，与anti_js路由中的处理方式一致
-        page_key = hashlib.md5(config.source_website.encode()).hexdigest()
+        page_key = get_page_key(config.source_website)
         browser_id = "default"
-
-        # 检查页面是否在缓存中
         if page_key in page_cache:
             # 获取页面对象
             page = page_cache[page_key]
@@ -1332,8 +1331,7 @@ async def list_configs(username: str = Depends(verify_credentials)):
                 # 计算使用百分比
                 config_dict["call_percentage"] = min(100, round(call_count / config.max_calls * 100, 2))
 
-            # 添加页面状态信息
-            page_key = hashlib.md5(config.source_website.encode()).hexdigest()
+            page_key = get_page_key(config.source_website)
             config_dict["is_page_open"] = page_key in page_cache
             config_dict["page_key"] = page_key
 
@@ -1345,6 +1343,28 @@ async def list_configs(username: str = Depends(verify_credentials)):
 
 
 inject_apis = [
+    {   
+        'id': -1,  
+        'api_name': 'test',
+        'user_name': 'system',
+        'source_website': 'https://www.google.com',
+        'hijack_js_url': '',
+        'breakpoint_line_num': 0,
+        'breakpoint_col_num': 0,
+        'target_func': """
+async (data) => {
+return document.documentElement.outerHTML;
+}
+""",
+        'params_example': """{}""",
+        'expire_time': None,  # 永不过期
+        'max_calls': None,  # 无调用次数限制
+        'is_active': True,
+        'description': '',
+        'override_funcs': 'setTimeout,setInterval',
+        'trigger_js': None,
+        'cookies': None,
+    },
     {
         'id': 99999,  # 使用一个特别的ID以避免冲突
         'api_name': 'debank_sign',
@@ -1463,6 +1483,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--nolog", action="store_true", help="Disable logging")
     parser.add_argument("--headless", action="store_true", help="Run in headless mode")
+    parser.add_argument("-r", "--restart", action="store_true", help="运行满指定小时后主动退出，依赖 Docker restart 重启容器")
     parser.add_argument("--config", type=str, help="Path to config file")
 
     args = parser.parse_args()
@@ -1504,6 +1525,23 @@ if __name__ == "__main__":
 
     # 预注入配置到website_configs中
     inject_website_configs()
+
+    # 加 -r 时：运行满指定小时后主动退出，依赖 compose restart 重启容器（含 Xvfb 等环境重置）
+    if args.restart:
+        try:
+            restart_hours = float(os.getenv("RESTART_INTERVAL_HOURS", "8"))
+        except (TypeError, ValueError):
+            restart_hours = 8.0
+        if restart_hours > 0:
+            interval_sec = int(restart_hours * 3600)
+
+            def _exit_after_interval():
+                time.sleep(interval_sec)
+                sys_logger.info(f"已运行 {restart_hours}h，主动退出以便由 Docker 重启容器")
+                sys.exit(0)
+
+            t = threading.Thread(target=_exit_after_interval, daemon=True)
+            t.start()
 
     uvicorn.run(app, host="0.0.0.0", port=server_port)
 

@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    container_name: yf_chrome
+    restart: always
+    ports:
+      - "8889:8889"
+    environment:
+      - BROWSER_TYPE=edge
+    # 无头浏览器建议加大共享内存，避免崩溃
+    shm_size: "6g"
