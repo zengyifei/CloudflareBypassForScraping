@@ -411,7 +411,7 @@ def bypass_cloudflare(url: str, retries: int, log: bool, proxy: str = None) -> C
         options.set_argument("-deny-permission-prompts")  # 拒绝权限提示
         options.set_paths(browser_path=browser_path).headless(False)
     else:
-        options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
+        # options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
         options.set_paths(browser_path=browser_path).headless(False)
 
     if proxy:
@@ -474,9 +474,10 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
         return browser_cache[browser_id]
 
     options = ChromiumOptions().auto_port()
+    options.set_user_data_path(os.path.join(os.getcwd(), "chrome_user_data", browser_id))
 
     options.set_argument("--deny-permission-prompts")  # 拒绝权限提示
-    options.set_argument("--incognito")  # 无痕模式
+    # options.set_argument("--incognito")  # 无痕模式
     options.set_argument("--disable-extensions")  # 禁用扩展
     options.set_argument("--disable-dev-shm-usage")  # 禁用/dev/shm使用，可以减少内存使用，但可能会影响性能
     options.set_argument("--disable-features=AudioServiceOutOfProcess")  # 禁用音频服务的单独进程，有时可以解决与音频相关的崩溃
@@ -518,7 +519,7 @@ def get_or_create_browser(browser_id: str, proxy: str = None, init_js: str = Non
         # 注：不确定绕过cloudflare是否需要headless设为false
         options.set_paths(browser_path=browser_path).headless(True)
     else:
-        options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
+        # options.set_argument("--auto-open-devtools-for-tabs", "true")  # 打开控制台
         options.set_paths(browser_path=browser_path).headless(False)
 
     if proxy:
@@ -860,6 +861,37 @@ async def async_eval_no_wait(code,page):
         lambda f: sys_logger.error(f"Eval操作异常: {f.exception()}") if f.done() and f.exception() else print("🎯 Eval操作已提交到后台线程") if f.done() else None
     )
 
+# Debugger.enable 单次等待超时（秒），4s 内收不到响应视为本次失败
+_DEBUGGER_ENABLE_TIMEOUT = 4
+
+
+async def _wait_debugger_enable(ws, next_id, pending_msgs: list) -> bool:
+    """
+    发送 Debugger.enable 并等待响应，最多等 _DEBUGGER_ENABLE_TIMEOUT 秒。
+    超时或返回错误均视为失败，不在此处重试。
+    非 enable 响应的消息会放入 pending_msgs 供主循环后续处理。
+    返回 True 表示 enable 成功，False 表示超时或失败。
+    """
+    enable_id = next_id()
+    await ws.send(json.dumps({"id": enable_id, "method": "Debugger.enable"}))
+    deadline = asyncio.get_event_loop().time() + _DEBUGGER_ENABLE_TIMEOUT
+    while asyncio.get_event_loop().time() < deadline:
+        try:
+            raw = await asyncio.wait_for(ws.recv(), timeout=2)
+        except asyncio.TimeoutError:
+            continue
+        data = json.loads(raw)
+        if data.get("id") == enable_id:
+            if "error" in data:
+                sys_logger.warning(f"Debugger.enable 返回错误: {data.get('error')}")
+                return False
+            await asyncio.sleep(0.1) # 等待0.1秒，确保Chrome处理完enable请求
+            return True
+        pending_msgs.append(data)
+    sys_logger.warning(f"Debugger.enable 等待响应超时 ({_DEBUGGER_ENABLE_TIMEOUT}s)")
+    return False
+
+
 async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, column_number=0, target_func_name="targetFunction", export_func_name="exposedFunction", trigger_js=None):
     # 注入辅助函数
     # ----------- 这是关键部分 - 将我们要找的函数暴露到全局作用域 ------------
@@ -871,142 +903,161 @@ async def setup_breakpoint_and_expose_function(page, chunk_url, line_number=0, c
         page.run_js(script)
         return
 
-    # 初始化 ws 变量为 None，确保在 finally 块中可以安全引用
-    ws = None
-
-    target_info = page.run_cdp("Target.getTargetInfo")
-    target_id = target_info.get('targetInfo', {}).get('targetId')
-    if not target_id:
-        sys_logger.error("无法获取目标ID")
-        return False
     current_url = page.url
     print('current_url', current_url)
-    # 构建WebSocket URL
-    ws_url = f"ws://{page.address}/devtools/page/{target_id}"
-    # sys_logger.info(f"连接DevTools WebSocket: {ws_url}")
-    try:
-        # 移除 timeout 参数，使其兼容 Python 3.10
-        ws = await websockets.connect(ws_url)        # sys_logger.info("WebSocket连接已打开")
-        def id_generator(start=1):
-            current_id = start
-            while True:
-                yield current_id
-                current_id += 1
-        next_id = lambda gen_obj=id_generator(): next(gen_obj)
-        # 启用调试器
-        await ws.send(json.dumps({
-            "id": next_id(),
-            "method": "Debugger.enable"
-        }))
-       
-        # 设置断点
-        await ws.send(json.dumps({
-            "id": next_id(),
-            "method": "Debugger.setBreakpointByUrl",
-            "params": {
-                "url": chunk_url,
-                "lineNumber": line_number,
-                "columnNumber": column_number,
-            }
-        }))
-        await ws.send(json.dumps({
-            "id": next_id(),
-            "method": "Page.enable"
-        }))
 
-        # if trigger_js:
-            # page.run_js(trigger_js, as_expr=True)
-        # print("监听消息")
-        # --- 第二阶段：监听消息直到满足条件 ---
-        trigger_received = False
-        # 记录开始时间
-        trigger_js_executed = False
-        
-        start_wait_time = asyncio.get_event_loop().time()
-        while not trigger_received:
-            # 检查是否超过3秒且还没执行过trigger_js
-            has_wait = asyncio.get_event_loop().time()-start_wait_time
-            if has_wait > 10:
-                raise asyncio.TimeoutError("等待断点触发超时，总等待时间超过5秒")
-
-            if has_wait > 5 and not trigger_js_executed and trigger_js:
-                await async_eval_no_wait(trigger_js, page)
-                trigger_js_executed=True
+    # 最多 2 次：首次 + 失败后刷新页面重试一次
+    for attempt in range(2):
+        if attempt == 1:
+            sys_logger.info("Debugger.enable 首次未成功，刷新页面后重试")
             try:
-                response = await asyncio.wait_for(ws.recv(), timeout=2)
-            except asyncio.TimeoutError:
-                # 检查总等待时间是否超过5秒
-                print('已等待时间', has_wait)
-                continue
-            # print('收到消息', response)
-            
-            # print(f"收到消息: {response}")
-            data = json.loads(response)
-            # 检查是否为断点暂停事件
-            if data.get('method') == 'Debugger.paused':
-                params = data.get('params', {})
-                hit_breakpoints = params.get('hitBreakpoints', [])
-                call_frame_id = params.get('callFrames', [])[0].get('callFrameId')
-
-                if hit_breakpoints:
-                    hit_id = hit_breakpoints[0]
-                    trigger_received = True
-                    # print(f"断点触发", hit_id, call_frame_id)
-
-                    await ws.send(json.dumps({
-                        "id": next_id(),
-                        "method": "Debugger.evaluateOnCallFrame",
-                        "params": {
-                            "callFrameId": call_frame_id,
-                            "expression": script
-                        }
-                    }))
-                    # 移除断点
-                    await ws.send(json.dumps({
-                        "id": next_id(),
-                        "method": "Debugger.removeBreakpoint",
-                        "params": {
-                            "breakpointId": hit_id
-                        }
-                    }))
-                    await ws.send(json.dumps({
-                        "id": next_id(),
-                        "method": "Page.stopLoading",
-                        "params": {}
-                    }))
-                    # print(f"注入辅助函数", call_frame_id, script)
-                    # # 恢复执行
-                    await ws.send(json.dumps({
-                        "id": next_id(),
-                        "method": "Debugger.resume",
-                        "params": {}
-                    }))
-                    print('移除断点', hit_id)
-
-            if data.get('method') == 'Page.frameNavigated':
-                frame = data["params"]["frame"]
-                url = frame.get("url", "")
-                print('frameNavigated', url)
-                if url != 'about:blank' and url != current_url:
-                    print('stopLoading', url)
-                    await ws.send(json.dumps({
-                        "id": next_id(),
-                        "method": "Page.stopLoading",
-                        "params": {}
-                    }))
-    except asyncio.TimeoutError:
-        sys_logger.error("操作超时，强制关闭连接")
-    except websockets.exceptions.ConnectionClosed as e:
-        sys_logger.error(f"连接异常关闭: {e.code} {e.reason}")
-    except Exception as e:
-        sys_logger.error(f"未知错误: {str(e)}")
-    finally:
-        # 安全地关闭 WebSocket 连接
-        if ws is not None:
-            try:
-                await ws.close()
+                page.get(current_url, timeout=10, retry=0)
             except Exception as e:
-                sys_logger.error(f"关闭 WebSocket 连接时出错: {str(e)}")
+                sys_logger.warning(f"刷新页面失败: {e}")
+            await asyncio.sleep(0.5)
+
+        ws = None
+        try:
+            target_info = page.run_cdp("Target.getTargetInfo")
+            target_id = target_info.get('targetInfo', {}).get('targetId')
+            if not target_id:
+                sys_logger.error("无法获取目标ID")
+                if attempt == 0:
+                    continue
+                return False
+            ws_url = f"ws://{page.address}/devtools/page/{target_id}"
+            ws = await websockets.connect(ws_url)
+            def id_generator(start=1):
+                current_id = start
+                while True:
+                    yield current_id
+                    current_id += 1
+            next_id = lambda gen_obj=id_generator(): next(gen_obj)
+
+            # 1. 先保证 Debugger.enable 成功（最多等 4s），失败则本轮放弃
+            pending_msgs = []
+            if not await _wait_debugger_enable(ws, next_id, pending_msgs):
+                if attempt == 0:
+                    continue  # 重试一次：刷新页面、重新连 ws、再走一遍
+                sys_logger.error("Debugger.enable 重试后仍失败，放弃设置断点")
+                return False
+            print('Debugger.enable 成功')
+
+            # 2. enable 成功后，再发送 Page.enable
+            await ws.send(json.dumps({
+                "id": next_id(),
+                "method": "Page.enable"
+            }))
+
+            # 3. 设置断点（仅在 enable 成功之后执行）
+            bpid = next_id()
+            await ws.send(json.dumps({
+                "id": bpid,
+                "method": "Debugger.setBreakpointByUrl",
+                "params": {
+                    "urlRegex": chunk_url,
+                    "lineNumber": line_number,
+                    "columnNumber": column_number,
+                }
+            }))
+
+            # 4. 主循环：先处理等待 enable 期间收到的待处理消息，再正常收包
+            trigger_received = False
+            trigger_js_executed = False
+            start_wait_time = asyncio.get_event_loop().time()
+
+            async def process_one(data):
+                nonlocal trigger_received, trigger_js_executed
+                if data.get('method') == 'Debugger.breakpointResolved':
+                    params = data.get('params', {})
+                    print(f"!!! 断点已解析确认: {params.get('breakpointId')} at {params.get('location')}")
+                if data.get('id') == bpid:
+                    # 收到 setBreakpointByUrl 的响应时打印
+                    print("[setBreakpointByUrl 响应]", data)
+                if data.get('method') == 'Debugger.paused':
+                    params = data.get('params', {})
+                    hit_breakpoints = params.get('hitBreakpoints', [])
+                    call_frame_id = params.get('callFrames', [])[0].get('callFrameId')
+                    if hit_breakpoints:
+                        hit_id = hit_breakpoints[0]
+                        trigger_received = True
+                        await ws.send(json.dumps({
+                            "id": next_id(),
+                            "method": "Debugger.evaluateOnCallFrame",
+                            "params": {
+                                "callFrameId": call_frame_id,
+                                "expression": script
+                            }
+                        }))
+                        await ws.send(json.dumps({
+                            "id": next_id(),
+                            "method": "Debugger.removeBreakpoint",
+                            "params": {"breakpointId": hit_id}
+                        }))
+                        await ws.send(json.dumps({
+                            "id": next_id(),
+                            "method": "Page.stopLoading",
+                            "params": {}
+                        }))
+                        await ws.send(json.dumps({
+                            "id": next_id(),
+                            "method": "Debugger.resume",
+                            "params": {}
+                        }))
+                        print('移除断点', hit_id)
+                if data.get('method') == 'Page.frameNavigated':
+                    frame = data["params"]["frame"]
+                    url = frame.get("url", "")
+                    print('frameNavigated', url)
+                    if url != 'about:blank' and url != current_url:
+                        print('stopLoading', url)
+                        await ws.send(json.dumps({
+                            "id": next_id(),
+                            "method": "Page.stopLoading",
+                            "params": {}
+                        }))
+
+            # 先消费等待 enable 时积压的消息
+            for data in pending_msgs:
+                await process_one(data)
+
+            while not trigger_received:
+                has_wait = asyncio.get_event_loop().time() - start_wait_time
+                if has_wait > 6:
+                    raise asyncio.TimeoutError("等待断点触发超时，总等待时间超过6秒")
+                # if has_wait > 5 and not trigger_js_executed and trigger_js:
+                    # await async_eval_no_wait(trigger_js, page)
+                    # trigger_js_executed = True
+                try:
+                    response = await asyncio.wait_for(ws.recv(), timeout=2)
+                except asyncio.TimeoutError:
+                    print('已等待时间', has_wait)
+                    continue
+                data = json.loads(response)
+                await process_one(data)
+            # 正常走完消息循环（trigger_received），跳出重试循环
+            break
+        except asyncio.TimeoutError:
+            sys_logger.error("操作超时，强制关闭连接")
+            if attempt == 0:
+                continue
+            return False
+        except websockets.exceptions.ConnectionClosed as e:
+            sys_logger.error(f"连接异常关闭: {e.code} {e.reason}")
+            if attempt == 0:
+                continue
+            return False
+        except Exception as e:
+            sys_logger.error(f"未知错误: {str(e)}")
+            if attempt == 0:
+                continue
+            return False
+        finally:
+            if ws is not None:
+                try:
+                    await ws.close()
+                except Exception as e:
+                    sys_logger.error(f"关闭 WebSocket 连接时出错: {str(e)}")
 
     return True
 
@@ -1355,7 +1406,7 @@ async (data) => {
         'source_website': 'https://web3.okx.com/zh-hans/token?hmi=500&pt=1&rb=8&tama=48&utmi=50&vmi=1000',
         'hijack_js_url': 'https://web3.okx.com/cdn/assets/okfe/util/ont/5.8.44/ont.js',
         'breakpoint_line_num': 0,
-        'breakpoint_col_num': 47010,
+        'breakpoint_col_num': 147007,
         'target_func': """
 async (data) => {
     return await io.getTokenAndSign({

@@ -147,6 +147,7 @@ dmypy.json
 
 # 服务端截图保存目录（由「查看截图」功能生成）
 snapshots/
+chrome_user_data/
 
 # Pyre type checker
 .pyre/
